@@ -5,6 +5,13 @@ import time
 import asyncio
 from datetime import datetime, timedelta
 
+# Load .env file if present (local dev); on Railway env vars are injected directly
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 import anthropic
 import httpx
 from telegram import Update, Document
@@ -26,9 +33,21 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
-ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
-NOTION_TOKEN = os.environ["NOTION_TOKEN"]
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
+NOTION_TOKEN = os.environ.get("NOTION_TOKEN")
+
+_missing = [k for k, v in {
+    "TELEGRAM_TOKEN": TELEGRAM_TOKEN,
+    "ANTHROPIC_API_KEY": ANTHROPIC_API_KEY,
+    "NOTION_TOKEN": NOTION_TOKEN,
+}.items() if not v]
+
+if _missing:
+    raise EnvironmentError(
+        f"Missing required environment variables: {', '.join(_missing)}\n"
+        "Set them in Railway → Variables or in a local .env file."
+    )
 
 AGENTS = {
     "paola": "Паола — Личный ассистент",
