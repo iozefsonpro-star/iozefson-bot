@@ -183,7 +183,7 @@ claude = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
 def ask_claude(system_prompt: str, user_message: str) -> str:
     response = claude.messages.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-4-5",
         max_tokens=2048,
         system=system_prompt,
         messages=[{"role": "user", "content": user_message}],
