@@ -315,10 +315,11 @@ def _get_gcal_credentials() -> Credentials | None:
         return None
 
 
-def get_calendar_events(days: int = 1) -> list[dict]:
+def get_calendar_events(days: int = 7) -> list[dict]:
     """
-    Return events for today (or next `days` days) from all configured calendars.
-    Each item: {time, title, calendar}
+    Return events for the next `days` days from all configured calendars.
+    Each item: {date, time, title, calendar}
+    Default: 7 days so Paola always has weekly context.
     """
     creds = _get_gcal_credentials()
     if not creds:
@@ -329,7 +330,8 @@ def get_calendar_events(days: int = 1) -> list[dict]:
         rome_tz = pytz.timezone("Europe/Rome")
         now = datetime.now(rome_tz)
         time_min = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-        time_max = now.replace(hour=23, minute=59, second=59, microsecond=0).isoformat()
+        from datetime import timedelta
+        time_max = (now + timedelta(days=days)).replace(hour=23, minute=59, second=59).isoformat()
 
         events = []
         for cal_id in GOOGLE_CALENDAR_IDS:
@@ -344,21 +346,26 @@ def get_calendar_events(days: int = 1) -> list[dict]:
                 ).execute()
                 for ev in result.get("items", []):
                     start = ev["start"].get("dateTime", ev["start"].get("date", ""))
-                    # Format time
                     if "T" in start:
-                        dt = datetime.fromisoformat(start)
-                        time_str = dt.astimezone(rome_tz).strftime("%H:%M")
+                        dt = datetime.fromisoformat(start).astimezone(rome_tz)
+                        date_str = dt.strftime("%d.%m (%a)")
+                        time_str = dt.strftime("%H:%M")
+                        sort_key = dt.isoformat()
                     else:
+                        date_str = start  # YYYY-MM-DD
                         time_str = "весь день"
+                        sort_key = start
                     events.append({
+                        "date":     date_str,
                         "time":     time_str,
                         "title":    ev.get("summary", "(без названия)"),
                         "calendar": cal_id,
+                        "_sort":    sort_key,
                     })
             except Exception as e:
                 logger.warning("Calendar %s error: %s", cal_id, e)
 
-        events.sort(key=lambda x: x["time"])
+        events.sort(key=lambda x: x["_sort"])
         logger.info("Loaded %d calendar events", len(events))
         return events
     except Exception as e:
@@ -370,10 +377,10 @@ def format_calendar_events(events: list[dict]) -> str:
     """Format events for injection into system prompt (silent context)."""
     if not events:
         return ""
-    lines = ["Встречи и события сегодня:"]
+    lines = ["События в календаре на ближайшие 7 дней:"]
     for ev in events:
         cal_label = "💼" if "pro" in ev["calendar"] else "👤"
-        lines.append(f"  {cal_label} {ev['time']} — {ev['title']}")
+        lines.append(f"  {cal_label} {ev['date']} {ev['time']} — {ev['title']}")
     return "\n".join(lines)
 
 
