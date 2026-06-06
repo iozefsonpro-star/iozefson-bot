@@ -77,9 +77,9 @@ PROMPT_CACHE_TTL  = 3600  # seconds
 HISTORY_LIMIT     = 10    # messages per user to keep
 
 # ---------------------------------------------------------------------------
-# Pending task actions  {user_id: {"title": str, "page_id": str}}
+# Pending overdue tasks from evening digest  {user_id: [task_dict, ...]}
 # ---------------------------------------------------------------------------
-pending_task_action: dict[int, dict] = {}
+_pending_overdue_by_user: dict[int, list] = {}
 
 # Model routing: each agent uses the most appropriate Claude model
 AGENT_MODELS = {
@@ -269,12 +269,19 @@ def build_notion_context(tasks: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def notion_update_deadline(page_id: str, new_date: str) -> None:
-    """Update task deadline by page_id."""
+def notion_update_deadline(title: str, new_date: str) -> bool:
+    """Update task deadline by title. new_date in YYYY-MM-DD format. Returns True if found."""
+    results = notion.databases.query(**{
+        "database_id": NOTION_TODOLIST_DB_ID,
+        "filter": {"property": "Задача", "rich_text": {"contains": title}},
+    }).get("results", [])
+    if not results:
+        return False
     notion.pages.update(
-        page_id=page_id,
+        page_id=results[0]["id"],
         properties={"Дедлайн": {"date": {"start": new_date}}},
     )
+    return True
 
 
 def notion_get_done_today() -> list[dict]:
@@ -656,12 +663,9 @@ async def _send_digest(bot: Bot, digest_type: str) -> None:
 
             text = "\n".join(parts)
 
-            # Store overdue for interactive reschedule
+            # Store overdue in bot_data so _handle_single can pick it up
             if overdue and OWNER_CHAT_ID:
-                pending_task_action[int(OWNER_CHAT_ID)] = {
-                    "tasks": overdue,
-                    "awaiting": True,
-                }
+                _pending_overdue_by_user[int(OWNER_CHAT_ID)] = list(overdue)
 
             await bot.send_message(chat_id=int(OWNER_CHAT_ID), text=text)
 
@@ -790,66 +794,103 @@ async def _handle_single(
     if agent_key == "paola":
         msg_lower = message.lower()
 
-        # --- Handle pending "Перенести?" responses from evening digest ---
-        if user_id in pending_task_action and pending_task_action[user_id].get("awaiting"):
-            pending = pending_task_action[user_id]
-            tasks_list = pending.get("tasks", [])
-            # Pick first overdue task for simplicity (user can repeat for next)
-            if tasks_list:
-                task = tasks_list[0]
-                page_id = task["id"]
-                title   = task["title"]
-                tomorrow_str = (__import__("datetime").date.today() +
-                                __import__("datetime").timedelta(days=1)).strftime("%Y-%m-%d")
+        # Pull pending overdue tasks from evening digest into user session
+        if user_id in _pending_overdue_by_user:
+            context.user_data["pending_overdue"] = _pending_overdue_by_user.pop(user_id)
+            if context.user_data["pending_overdue"]:
+                context.user_data["last_task"] = context.user_data["pending_overdue"][0]["title"]
 
-                handled = False
+        # --- Handle pending "Перенести?" responses ---
+        pending_tasks = context.user_data.get("pending_overdue", [])
+        last_task     = context.user_data.get("last_task", "")
 
-                # Reschedule to tomorrow
-                if any(kw in msg_lower for kw in ["да", "перенеси", "перенести", "завтра"]):
-                    notion_update_deadline(page_id, tomorrow_str)
-                    await update.message.reply_text(f"✅ Перенесла на {tomorrow_str}: {title}")
+        if pending_tasks or last_task:
+            # Determine which task we're talking about
+            task_title = last_task
+            if not task_title and pending_tasks:
+                task_title = pending_tasks[0]["title"]
+
+            import datetime as dt_module
+            today_date    = dt_module.date.today()
+            tomorrow_str  = (today_date + dt_module.timedelta(days=1)).strftime("%Y-%m-%d")
+            today_str_iso = today_date.strftime("%Y-%m-%d")
+
+            handled = False
+
+            # Reschedule to tomorrow
+            if any(kw in msg_lower for kw in ["да", "перенеси", "перенести", "завтра"]) and task_title:
+                try:
+                    done = notion_update_deadline(task_title, tomorrow_str)
+                    if done:
+                        await update.message.reply_text(f"✅ Перенесла на {tomorrow_str}: {task_title}")
+                    else:
+                        await update.message.reply_text(f"❌ Не нашла задачу: {task_title}")
                     handled = True
+                except Exception as e:
+                    logger.error("Update deadline error: %s", e)
 
-                # Reschedule to specific date via Claude parse
-                elif any(kw in msg_lower for kw in ["на ", "до "]):
-                    try:
-                        today = __import__("datetime").date.today().strftime("%Y-%m-%d")
-                        parse_resp = ask_claude(
-                            f"Сегодня {today}. Извлеки дату из сообщения и верни ТОЛЬКО дату в формате YYYY-MM-DD. "
-                            "Если дата не найдена — верни NONE.",
-                            message,
-                        ).strip()
-                        if parse_resp != "NONE" and len(parse_resp) == 10:
-                            notion_update_deadline(page_id, parse_resp)
-                            await update.message.reply_text(f"✅ Перенесла на {parse_resp}: {title}")
-                            handled = True
-                    except Exception as e:
-                        logger.error("Date parse error: %s", e)
+            # Reschedule to specific date
+            elif any(kw in msg_lower for kw in ["на ", "до ", "июня", "июля", "августа",
+                                                  "сентября", "октября", "ноября", "декабря",
+                                                  "января", "февраля", "марта", "апреля", "мая"]):
+                try:
+                    parse_resp = ask_claude(
+                        f"Сегодня {today_str_iso}. Извлеки дату из сообщения и верни ТОЛЬКО "
+                        "дату в формате YYYY-MM-DD. Если дата не найдена — верни NONE.",
+                        message,
+                    ).strip()
+                    if parse_resp != "NONE" and len(parse_resp) == 10:
+                        done = notion_update_deadline(task_title, parse_resp)
+                        if done:
+                            await update.message.reply_text(f"✅ Перенесла на {parse_resp}: {task_title}")
+                        else:
+                            await update.message.reply_text(f"❌ Не нашла задачу: {task_title}")
+                        handled = True
+                except Exception as e:
+                    logger.error("Date parse error: %s", e)
 
-                # Close as done
-                if not handled and any(kw in msg_lower for kw in
-                                       ["нет, уже сделано", "закрой", "выполнено", "сделано"]):
-                    notion_close_task(title)
-                    await update.message.reply_text(f"✅ Закрыла как выполненное: {title}")
+            # Close as done
+            elif any(kw in msg_lower for kw in ["уже сделано", "закрой", "выполнено", "сделано", "готово"]):
+                try:
+                    done = notion_close_task(task_title)
+                    if done:
+                        await update.message.reply_text(f"✅ Закрыла как выполненное: {task_title}")
+                    else:
+                        await update.message.reply_text(f"❌ Не нашла задачу: {task_title}")
                     handled = True
+                except Exception as e:
+                    logger.error("Close task error: %s", e)
 
-                # Delete
-                if not handled and any(kw in msg_lower for kw in ["удали", "удалить"]):
-                    notion_delete_task(title)
-                    await update.message.reply_text(f"🗑 Удалила: {title}")
+            # Delete
+            elif any(kw in msg_lower for kw in ["удали", "удалить"]):
+                try:
+                    done = notion_delete_task(task_title)
+                    if done:
+                        await update.message.reply_text(f"🗑 Удалила: {task_title}")
+                    else:
+                        await update.message.reply_text(f"❌ Не нашла задачу: {task_title}")
                     handled = True
+                except Exception as e:
+                    logger.error("Delete task error: %s", e)
 
-                if handled:
-                    tasks_list.pop(0)
-                    if tasks_list:
-                        next_t = tasks_list[0]
-                        dl = f" (дедлайн {next_t['deadline']})" if next_t["deadline"] else ""
+            if handled:
+                # Move to next pending task if any
+                if pending_tasks:
+                    pending_tasks.pop(0)
+                    context.user_data["pending_overdue"] = pending_tasks
+                    if pending_tasks:
+                        next_t = pending_tasks[0]
+                        dl = f" (дедлайн {next_t['deadline']})" if next_t.get("deadline") else ""
+                        context.user_data["last_task"] = next_t["title"]
                         await update.message.reply_text(
-                            f"Следующая: {next_t['title']}{dl} — перенести?"
+                            f"Следующая просроченная: {next_t['title']}{dl}\nПеренести?"
                         )
                     else:
-                        del pending_task_action[user_id]
-                    return
+                        context.user_data.pop("last_task", None)
+                        context.user_data.pop("pending_overdue", None)
+                else:
+                    context.user_data.pop("last_task", None)
+                return
 
         # --- Keyword shortcuts ---
         if any(kw in msg_lower for kw in ["покажи задачи", "список задач", "мои задачи"]):
@@ -989,6 +1030,20 @@ async def _handle_single(
 
     add_to_history(user_id, "user", message)
     add_to_history(user_id, "assistant", reply)
+
+    # Remember last mentioned task title for follow-up actions
+    if agent_key == "paola":
+        try:
+            title_parse = ask_claude(
+                "Если в сообщении пользователя упоминается конкретная задача или дело — "
+                "верни ТОЛЬКО её название (кратко). Иначе верни NONE.",
+                message,
+            ).strip()
+            if title_parse and title_parse != "NONE" and len(title_parse) < 100:
+                context.user_data["last_task"] = title_parse
+        except Exception:
+            pass
+
     await update.message.reply_text(reply)
 
 
