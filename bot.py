@@ -163,7 +163,7 @@ def notion_create_task(title: str, deadline: str | None, priority: str, section:
         "Приоритет": {"select": {"name": priority}},
         "Статус": {"select": {"name": "To Do"}},
         "Раздел": {"select": {"name": section}},
-        "Кто делает": {"select": {"name": assignee}},
+        "Кто делает": {"multi_select": [{"name": assignee}]},
     }
     if deadline:
         properties["Дедлайн"] = {"date": {"start": deadline}}
@@ -190,7 +190,7 @@ def notion_get_tasks() -> list[dict]:
         deadline = (props.get("Дедлайн", {}).get("date") or {}).get("start", "")
         priority = (props.get("Приоритет", {}).get("select") or {}).get("name", "")
         status = (props.get("Статус", {}).get("select") or {}).get("name", "")
-        assignee = (props.get("Кто делает", {}).get("select") or {}).get("name", "")
+        assignee = ", ".join(o["name"] for o in props.get("Кто делает", {}).get("multi_select", []))
         tasks.append({"id": page["id"], "title": title, "deadline": deadline,
                       "priority": priority, "status": status, "assignee": assignee})
     return tasks
