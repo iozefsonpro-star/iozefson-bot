@@ -66,6 +66,16 @@ AGENTS_PAGE_TITLE = "Агенты"
 PROMPT_CACHE_TTL  = 3600  # seconds
 HISTORY_LIMIT     = 10    # messages per user to keep
 
+# Model routing: each agent uses the most appropriate Claude model
+AGENT_MODELS = {
+    "paola":  "claude-haiku-4-5-20251001",  # fast & cheap: briefings, task lists
+    "carlo":  "claude-sonnet-4-6",           # quality matters: voice & content style
+    "boris":  "claude-sonnet-4-6",           # depth matters: document analysis
+    "sandro": "claude-sonnet-4-6",           # precision matters: technical explanations
+    "team":   "claude-sonnet-4-6",           # quality: 4 agents answer in sequence
+}
+DEFAULT_MODEL = "claude-sonnet-4-6"
+
 # ---------------------------------------------------------------------------
 # Conversation history  {user_id: deque([{role, content}, ...])}
 # ---------------------------------------------------------------------------
@@ -251,12 +261,14 @@ claude = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
 
 def ask_claude(system_prompt: str, user_message: str,
-               history: list[dict] | None = None) -> str:
+               history: list[dict] | None = None,
+               model: str = DEFAULT_MODEL,
+               max_tokens: int = 2048) -> str:
     messages = list(history) if history else []
     messages.append({"role": "user", "content": user_message})
     response = claude.messages.create(
-        model="claude-sonnet-4-5",
-        max_tokens=2048,
+        model=model,
+        max_tokens=max_tokens,
         system=system_prompt,
         messages=messages,
     )
@@ -495,7 +507,8 @@ async def _handle_single(
             if created_tasks:
                 # Send Claude's friendly reply first
                 try:
-                    reply = ask_claude(prompt, message, get_history(user_id))
+                    agent_model = AGENT_MODELS.get(agent_key, DEFAULT_MODEL)
+                    reply = ask_claude(prompt, message, get_history(user_id), model=agent_model)
                     add_to_history(user_id, "user", message)
                     add_to_history(user_id, "assistant", reply)
                     await update.message.reply_text(reply)
@@ -512,8 +525,10 @@ async def _handle_single(
 
     # Regular Claude reply with history
     try:
+        agent_model = AGENT_MODELS.get(agent_key, DEFAULT_MODEL)
         history = get_history(user_id)
-        reply   = ask_claude(prompt, message, history)
+        reply   = ask_claude(prompt, message, history, model=agent_model)
+        logger.info("Agent %s using model %s", agent_key, agent_model)
     except Exception as e:
         logger.error("Claude API error: %s", e)
         await update.message.reply_text(f"Ошибка Claude API: {e}")
@@ -542,7 +557,9 @@ async def _handle_team(
             await update.message.reply_text(f"*{agent_name}*: Ошибка загрузки промпта — {e}", parse_mode="Markdown")
             continue
         try:
-            reply = ask_claude(prompt, message, history)
+            agent_model = AGENT_MODELS.get(agent_key, DEFAULT_MODEL)
+            reply = ask_claude(prompt, message, history, model=agent_model, max_tokens=700)
+            logger.info("Team agent %s using model %s", agent_key, agent_model)
         except Exception as e:
             logger.error("Claude API error for %s: %s", agent_key, e)
             await update.message.reply_text(f"*{agent_name}*: Ошибка Claude API — {e}", parse_mode="Markdown")
