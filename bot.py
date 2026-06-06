@@ -36,11 +36,13 @@ logger = logging.getLogger(__name__)
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 NOTION_TOKEN = os.environ.get("NOTION_TOKEN")
+NOTION_TODOLIST_DB_ID = os.environ.get("NOTION_TODOLIST_DB_ID")
 
 _missing = [k for k, v in {
     "TELEGRAM_TOKEN": TELEGRAM_TOKEN,
     "ANTHROPIC_API_KEY": ANTHROPIC_API_KEY,
     "NOTION_TOKEN": NOTION_TOKEN,
+    "NOTION_TODOLIST_DB_ID": NOTION_TODOLIST_DB_ID,
 }.items() if not v]
 
 if _missing:
@@ -131,6 +133,118 @@ def fetch_agent_prompt(agent_key: str) -> str:
 
     _prompt_cache[agent_key] = (prompt, time.time())
     return prompt
+
+# ---------------------------------------------------------------------------
+# To-do list Notion functions
+# ---------------------------------------------------------------------------
+
+PRIORITY_MAP = {
+    "срочное": "Срочное", "срочно": "Срочное",
+    "важное": "Важное", "важно": "Важное",
+    "обычное": "Обычное", "обычно": "Обычное",
+}
+
+ASSIGNEE_MAP = {
+    "юля": "Юля", "я": "Юля",
+    "паола": "Паола", "карло": "Карло",
+    "борис": "Борис", "сандро": "Сандро",
+}
+
+SECTION_MAP = {
+    "саморазвитие": "Саморазвитие", "здоровье": "Здоровье",
+    "семья": "Семья", "нетворкинг": "Нетворкинг", "бизнес": "Бизнес",
+}
+
+
+def notion_create_task(title: str, deadline: str | None, priority: str, section: str, assignee: str) -> dict:
+    """Create a task in Notion To-do list database."""
+    properties = {
+        "Name": {"title": [{"text": {"content": title}}]},
+        "Приоритет": {"select": {"name": priority}},
+        "Статус": {"select": {"name": "To Do"}},
+        "Раздел": {"select": {"name": section}},
+        "Кто делает": {"select": {"name": assignee}},
+    }
+    if deadline:
+        properties["Дедлайн"] = {"date": {"start": deadline}}
+    return notion.pages.create(
+        parent={"database_id": NOTION_TODOLIST_DB_ID},
+        properties=properties,
+    )
+
+
+def notion_get_tasks() -> list[dict]:
+    """Get active tasks (To Do + In Progress) from Notion."""
+    response = notion.databases.query(
+        database_id=NOTION_TODOLIST_DB_ID,
+        filter={"or": [
+            {"property": "Статус", "select": {"equals": "To Do"}},
+            {"property": "Статус", "select": {"equals": "In Progress"}},
+        ]},
+        sorts=[{"property": "Приоритет", "direction": "ascending"}],
+    )
+    tasks = []
+    for page in response.get("results", []):
+        props = page.get("properties", {})
+        title = "".join(t.get("plain_text", "") for t in props.get("Name", {}).get("title", []))
+        deadline = (props.get("Дедлайн", {}).get("date") or {}).get("start", "")
+        priority = (props.get("Приоритет", {}).get("select") or {}).get("name", "")
+        status = (props.get("Статус", {}).get("select") or {}).get("name", "")
+        assignee = (props.get("Кто делает", {}).get("select") or {}).get("name", "")
+        tasks.append({"id": page["id"], "title": title, "deadline": deadline,
+                      "priority": priority, "status": status, "assignee": assignee})
+    return tasks
+
+
+def notion_close_task(title: str) -> bool:
+    """Set task status to Done by title."""
+    results = notion.databases.query(
+        database_id=NOTION_TODOLIST_DB_ID,
+        filter={"property": "Name", "rich_text": {"contains": title}},
+    ).get("results", [])
+    if not results:
+        return False
+    notion.pages.update(page_id=results[0]["id"],
+                        properties={"Статус": {"select": {"name": "Done"}}})
+    return True
+
+
+def notion_delete_task(title: str) -> bool:
+    """Archive (delete) task by title."""
+    results = notion.databases.query(
+        database_id=NOTION_TODOLIST_DB_ID,
+        filter={"property": "Name", "rich_text": {"contains": title}},
+    ).get("results", [])
+    if not results:
+        return False
+    notion.pages.update(page_id=results[0]["id"], archived=True)
+    return True
+
+
+def format_tasks_list(tasks: list[dict]) -> str:
+    """Format tasks list for Telegram message."""
+    if not tasks:
+        return "✅ Активных задач нет."
+    icon_map = {"Срочное": "🔴", "Важное": "🟡", "Обычное": "🟢"}
+    lines = ["📋 Активные задачи:\n"]
+    for t in tasks:
+        icon = icon_map.get(t["priority"], "⚪")
+        deadline = f" — до {t['deadline']}" if t["deadline"] else ""
+        assignee = f" [{t['assignee']}]" if t["assignee"] else ""
+        lines.append(f"{icon} {t['title']}{deadline}{assignee}")
+    return "\n".join(lines)
+
+
+def build_notion_context(tasks: list[dict]) -> str:
+    """Build task summary to inject into Claude system prompt."""
+    if not tasks:
+        return "To-do list пуст."
+    lines = ["Текущие задачи в To-do list:"]
+    for t in tasks:
+        deadline = f", дедлайн {t['deadline']}" if t["deadline"] else ""
+        lines.append(f"- {t['title']} [{t['priority']}{deadline}, {t['assignee']}]")
+    return "\n".join(lines)
+
 
 
 # ---------------------------------------------------------------------------
@@ -293,12 +407,101 @@ async def _handle_single(
         await update.message.reply_text(f"Ошибка при загрузке промпта из Notion: {e}")
         return
 
+    # For Paola: detect task commands and execute them directly via Notion API
+    if agent_key == "paola":
+        msg_lower = message.lower()
+
+        # Show tasks
+        if any(kw in msg_lower for kw in ["покажи задачи", "список задач", "мои задачи"]):
+            try:
+                tasks = notion_get_tasks()
+                await update.message.reply_text(format_tasks_list(tasks))
+                return
+            except Exception as e:
+                logger.error("Notion get tasks error: %s", e)
+
+        # Close task
+        if any(kw in msg_lower for kw in ["закрой задачу", "закрыть задачу", "выполнена задача"]):
+            for kw in ["закрой задачу", "закрыть задачу", "выполнена задача"]:
+                if kw in msg_lower:
+                    title = message[msg_lower.index(kw) + len(kw):].strip()
+                    if title:
+                        try:
+                            done = notion_close_task(title)
+                            if done:
+                                await update.message.reply_text(f"✅ Задача закрыта: {title}")
+                            else:
+                                await update.message.reply_text(f"❌ Задача не найдена: {title}")
+                            return
+                        except Exception as e:
+                            logger.error("Notion close task error: %s", e)
+                    break
+
+        # Delete task
+        if any(kw in msg_lower for kw in ["удали задачу", "удалить задачу"]):
+            for kw in ["удали задачу", "удалить задачу"]:
+                if kw in msg_lower:
+                    title = message[msg_lower.index(kw) + len(kw):].strip()
+                    if title:
+                        try:
+                            deleted = notion_delete_task(title)
+                            if deleted:
+                                await update.message.reply_text(f"🗑 Задача удалена: {title}")
+                            else:
+                                await update.message.reply_text(f"❌ Задача не найдена: {title}")
+                            return
+                        except Exception as e:
+                            logger.error("Notion delete task error: %s", e)
+                    break
+
+        # Inject current tasks into prompt so Paola is aware
+        try:
+            tasks = notion_get_tasks()
+            task_context = build_notion_context(tasks)
+            prompt = prompt + f"\n\nТЕКУЩИЕ ДАННЫЕ ИЗ NOTION (реальные, не придумывай):\n{task_context}"
+        except Exception as e:
+            logger.warning("Could not load tasks for context: %s", e)
+
     try:
         reply = ask_claude(prompt, message)
     except Exception as e:
         logger.error("Claude API error: %s", e)
         await update.message.reply_text(f"Ошибка Claude API: {e}")
         return
+
+    # After Claude replies: if Paola confirmed task creation, actually create it in Notion
+    if agent_key == "paola":
+        msg_lower = message.lower()
+        if any(kw in msg_lower for kw in ["добавь задачу", "создай задачу", "запомни", "поставь в список", "добавь таск"]):
+            try:
+                # Let Claude parse the task details via a structured sub-call
+                parse_prompt = (
+                    "Из сообщения пользователя извлеки параметры задачи и ответь ТОЛЬКО в формате:\n"
+                    "TITLE: <название>\n"
+                    "DEADLINE: <дата в формате YYYY-MM-DD или пусто>\n"
+                    "PRIORITY: <Срочное|Важное|Обычное>\n"
+                    "SECTION: <Саморазвитие|Здоровье|Семья|Нетворкинг|Бизнес>\n"
+                    "ASSIGNEE: <Юля|Паола|Карло|Борис|Сандро>\n"
+                    "Если что-то не указано: DEADLINE пусто, PRIORITY=Обычное, SECTION=Бизнес, ASSIGNEE=Юля."
+                )
+                parsed = ask_claude(parse_prompt, message)
+                lines = {l.split(":")[0].strip(): ":".join(l.split(":")[1:]).strip()
+                         for l in parsed.strip().splitlines() if ":" in l}
+                title = lines.get("TITLE", "").strip()
+                deadline = lines.get("DEADLINE", "").strip() or None
+                priority = lines.get("PRIORITY", "Обычное").strip()
+                section = lines.get("SECTION", "Бизнес").strip()
+                assignee = lines.get("ASSIGNEE", "Юля").strip()
+
+                if title:
+                    notion_create_task(title, deadline, priority, section, assignee)
+                    deadline_str = f", дедлайн {deadline}" if deadline else ""
+                    await update.message.reply_text(
+                        f"✅ Задача добавлена в Notion: {title}{deadline_str} [{assignee}]"
+                    )
+                    return
+            except Exception as e:
+                logger.error("Notion create task error: %s", e)
 
     await update.message.reply_text(reply)
 
