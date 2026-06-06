@@ -790,146 +790,169 @@ async def _handle_single(
         await update.message.reply_text(f"Ошибка при загрузке промпта из Notion: {e}")
         return
 
-    # Paola-specific: interactive task management
+    # Paola-specific: all task operations go through real Notion API
     if agent_key == "paola":
         msg_lower = message.lower()
+        import datetime as dt_module
 
-        # Pull pending overdue tasks from evening digest into user session
+        today_date   = dt_module.date.today()
+        tomorrow_str = (today_date + dt_module.timedelta(days=1)).strftime("%Y-%m-%d")
+        today_iso    = today_date.strftime("%Y-%m-%d")
+        icon_map     = {"Срочное": "🔴", "Важное": "🟡", "Обычное": "🟢"}
+
+        # Pull pending overdue from evening digest
         if user_id in _pending_overdue_by_user:
             context.user_data["pending_overdue"] = _pending_overdue_by_user.pop(user_id)
             if context.user_data["pending_overdue"]:
                 context.user_data["last_task"] = context.user_data["pending_overdue"][0]["title"]
 
-        # --- Handle pending "Перенести?" responses ---
+        # ----------------------------------------------------------------
+        # STEP 1 — If there is a pending task awaiting action, handle it
+        # ----------------------------------------------------------------
         pending_tasks = context.user_data.get("pending_overdue", [])
         last_task     = context.user_data.get("last_task", "")
+        task_title    = last_task or (pending_tasks[0]["title"] if pending_tasks else "")
 
-        if pending_tasks or last_task:
-            # Determine which task we're talking about
-            task_title = last_task
-            if not task_title and pending_tasks:
-                task_title = pending_tasks[0]["title"]
-
-            import datetime as dt_module
-            today_date    = dt_module.date.today()
-            tomorrow_str  = (today_date + dt_module.timedelta(days=1)).strftime("%Y-%m-%d")
-            today_str_iso = today_date.strftime("%Y-%m-%d")
-
+        if task_title:
             handled = False
 
-            # Reschedule to tomorrow
-            if any(kw in msg_lower for kw in ["да", "перенеси", "перенести", "завтра"]) and task_title:
-                try:
-                    done = notion_update_deadline(task_title, tomorrow_str)
-                    if done:
-                        await update.message.reply_text(f"✅ Перенесла на {tomorrow_str}: {task_title}")
-                    else:
-                        await update.message.reply_text(f"❌ Не нашла задачу: {task_title}")
-                    handled = True
-                except Exception as e:
-                    logger.error("Update deadline error: %s", e)
+            # Close / done
+            if any(kw in msg_lower for kw in [
+                "уже сделано", "закрой", "выполнено", "сделано", "готово", "done"
+            ]):
+                done = notion_close_task(task_title)
+                await update.message.reply_text(
+                    f"✅ Закрыла: {task_title}" if done else f"❌ Не нашла: {task_title}"
+                )
+                handled = True
 
-            # Reschedule to specific date
-            elif any(kw in msg_lower for kw in ["на ", "до ", "июня", "июля", "августа",
-                                                  "сентября", "октября", "ноября", "декабря",
-                                                  "января", "февраля", "марта", "апреля", "мая"]):
+            # Delete
+            elif any(kw in msg_lower for kw in ["удали", "удалить", "delete"]):
+                done = notion_delete_task(task_title)
+                await update.message.reply_text(
+                    f"🗑 Удалила: {task_title}" if done else f"❌ Не нашла: {task_title}"
+                )
+                handled = True
+
+            # Reschedule to tomorrow
+            elif any(kw in msg_lower for kw in ["да", "перенеси", "перенести", "завтра", "yes"]):
+                done = notion_update_deadline(task_title, tomorrow_str)
+                await update.message.reply_text(
+                    f"✅ Перенесла на {tomorrow_str}: {task_title}" if done
+                    else f"❌ Не нашла: {task_title}"
+                )
+                handled = True
+
+            # Reschedule to specific date — parse via Claude
+            elif any(kw in msg_lower for kw in [
+                "на ", "до ", "июня", "июля", "августа", "сентября",
+                "октября", "ноября", "декабря", "января", "февраля",
+                "марта", "апреля", "мая", "числа"
+            ]):
                 try:
-                    parse_resp = ask_claude(
-                        f"Сегодня {today_str_iso}. Извлеки дату из сообщения и верни ТОЛЬКО "
-                        "дату в формате YYYY-MM-DD. Если дата не найдена — верни NONE.",
+                    parsed_date = ask_claude(
+                        f"Сегодня {today_iso}. Из сообщения извлеки дату и верни ТОЛЬКО "
+                        "YYYY-MM-DD. Если нет даты — NONE.",
                         message,
                     ).strip()
-                    if parse_resp != "NONE" and len(parse_resp) == 10:
-                        done = notion_update_deadline(task_title, parse_resp)
-                        if done:
-                            await update.message.reply_text(f"✅ Перенесла на {parse_resp}: {task_title}")
-                        else:
-                            await update.message.reply_text(f"❌ Не нашла задачу: {task_title}")
+                    if parsed_date != "NONE" and len(parsed_date) == 10:
+                        done = notion_update_deadline(task_title, parsed_date)
+                        await update.message.reply_text(
+                            f"✅ Перенесла на {parsed_date}: {task_title}" if done
+                            else f"❌ Не нашла: {task_title}"
+                        )
                         handled = True
                 except Exception as e:
                     logger.error("Date parse error: %s", e)
 
-            # Close as done
-            elif any(kw in msg_lower for kw in ["уже сделано", "закрой", "выполнено", "сделано", "готово"]):
-                try:
-                    done = notion_close_task(task_title)
-                    if done:
-                        await update.message.reply_text(f"✅ Закрыла как выполненное: {task_title}")
-                    else:
-                        await update.message.reply_text(f"❌ Не нашла задачу: {task_title}")
-                    handled = True
-                except Exception as e:
-                    logger.error("Close task error: %s", e)
-
-            # Delete
-            elif any(kw in msg_lower for kw in ["удали", "удалить"]):
-                try:
-                    done = notion_delete_task(task_title)
-                    if done:
-                        await update.message.reply_text(f"🗑 Удалила: {task_title}")
-                    else:
-                        await update.message.reply_text(f"❌ Не нашла задачу: {task_title}")
-                    handled = True
-                except Exception as e:
-                    logger.error("Delete task error: %s", e)
-
             if handled:
-                # Move to next pending task if any
                 if pending_tasks:
                     pending_tasks.pop(0)
-                    context.user_data["pending_overdue"] = pending_tasks
-                    if pending_tasks:
-                        next_t = pending_tasks[0]
-                        dl = f" (дедлайн {next_t['deadline']})" if next_t.get("deadline") else ""
-                        context.user_data["last_task"] = next_t["title"]
-                        await update.message.reply_text(
-                            f"Следующая просроченная: {next_t['title']}{dl}\nПеренести?"
-                        )
-                    else:
-                        context.user_data.pop("last_task", None)
-                        context.user_data.pop("pending_overdue", None)
+                context.user_data["pending_overdue"] = pending_tasks
+                if pending_tasks:
+                    next_t = pending_tasks[0]
+                    dl = f" (дедлайн {next_t['deadline']})" if next_t.get("deadline") else ""
+                    context.user_data["last_task"] = next_t["title"]
+                    await update.message.reply_text(
+                        f"Следующая: {next_t['title']}{dl}\nПеренести? (да / дата / закрой / удали)"
+                    )
                 else:
                     context.user_data.pop("last_task", None)
+                    context.user_data.pop("pending_overdue", None)
                 return
 
-        # --- Keyword shortcuts ---
-        if any(kw in msg_lower for kw in ["покажи задачи", "список задач", "мои задачи"]):
-            try:
-                tasks = notion_get_tasks()
-                await update.message.reply_text(format_tasks_list(tasks))
+        # ----------------------------------------------------------------
+        # STEP 2 — Detect task intent via Claude, then hit Notion for real
+        # ----------------------------------------------------------------
+        TASK_INTENT_PROMPT = (
+            f"Сегодня {today_iso}. Сообщение пользователя: «{message}»\n\n"
+            "Определи намерение. Ответь ТОЛЬКО одним из кодов:\n"
+            "SHOW_ALL — показать все активные задачи\n"
+            "SHOW_OVERDUE — показать просроченные задачи\n"
+            "CLOSE: <название> — закрыть задачу\n"
+            "DELETE: <название> — удалить задачу\n"
+            "RESCHEDULE: <название> | <YYYY-MM-DD> — перенести дедлайн\n"
+            "CREATE_TASK — создать задачу\n"
+            "OTHER — всё остальное"
+        )
+        try:
+            intent = ask_claude(TASK_INTENT_PROMPT, message).strip()
+        except Exception as e:
+            logger.error("Intent detection error: %s", e)
+            intent = "OTHER"
+
+        logger.info("Task intent: %s", intent)
+
+        if intent.startswith("SHOW_ALL"):
+            tasks = notion_get_tasks()
+            await update.message.reply_text(format_tasks_list(tasks))
+            return
+
+        if intent.startswith("SHOW_OVERDUE"):
+            overdue = notion_get_overdue()
+            if not overdue:
+                await update.message.reply_text("✅ Просроченных задач нет!")
+            else:
+                lines = [f"⚠️ Просроченные задачи ({len(overdue)}):"]
+                for t in overdue:
+                    icon = icon_map.get(t["priority"], "⚪")
+                    dl   = f" (дедлайн {t['deadline']})" if t["deadline"] else ""
+                    lines.append(f"{icon} {t['title']}{dl}")
+                context.user_data["pending_overdue"] = overdue
+                context.user_data["last_task"]       = overdue[0]["title"]
+                lines.append(
+                    f"\nПеренести «{overdue[0]['title']}»? (да / дата / закрой / удали)"
+                )
+                await update.message.reply_text("\n".join(lines))
+            return
+
+        if intent.startswith("CLOSE:"):
+            title = intent[6:].strip()
+            done  = notion_close_task(title)
+            await update.message.reply_text(
+                f"✅ Закрыла: {title}" if done else f"❌ Не нашла: {title}"
+            )
+            return
+
+        if intent.startswith("DELETE:"):
+            title = intent[7:].strip()
+            done  = notion_delete_task(title)
+            await update.message.reply_text(
+                f"🗑 Удалила: {title}" if done else f"❌ Не нашла: {title}"
+            )
+            return
+
+        if intent.startswith("RESCHEDULE:"):
+            parts = intent[11:].split("|")
+            if len(parts) == 2:
+                title    = parts[0].strip()
+                new_date = parts[1].strip()
+                done     = notion_update_deadline(title, new_date)
+                await update.message.reply_text(
+                    f"✅ Перенесла на {new_date}: {title}" if done
+                    else f"❌ Не нашла: {title}"
+                )
                 return
-            except Exception as e:
-                logger.error("Notion get tasks error: %s", e)
-
-        if any(kw in msg_lower for kw in ["закрой задачу", "закрыть задачу", "выполнена задача"]):
-            for kw in ["закрой задачу", "закрыть задачу", "выполнена задача"]:
-                if kw in msg_lower:
-                    title = message[msg_lower.index(kw) + len(kw):].strip()
-                    if title:
-                        try:
-                            done = notion_close_task(title)
-                            await update.message.reply_text(
-                                f"✅ Задача закрыта: {title}" if done else f"❌ Задача не найдена: {title}"
-                            )
-                            return
-                        except Exception as e:
-                            logger.error("Notion close task error: %s", e)
-                    break
-
-        if any(kw in msg_lower for kw in ["удали задачу", "удалить задачу"]):
-            for kw in ["удали задачу", "удалить задачу"]:
-                if kw in msg_lower:
-                    title = message[msg_lower.index(kw) + len(kw):].strip()
-                    if title:
-                        try:
-                            deleted = notion_delete_task(title)
-                            await update.message.reply_text(
-                                f"🗑 Задача удалена: {title}" if deleted else f"❌ Задача не найдена: {title}"
-                            )
-                            return
-                        except Exception as e:
-                            logger.error("Notion delete task error: %s", e)
-                    break
 
         # Inject date + tasks + calendar silently into system prompt
         today_str = datetime.now().strftime("%d.%m.%Y (%A)")
