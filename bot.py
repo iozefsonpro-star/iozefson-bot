@@ -596,19 +596,8 @@ async def extract_text_from_document(doc: Document, bot) -> str:
 # Main
 # ---------------------------------------------------------------------------
 
-def main() -> None:
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
-
-    app.add_handler(CommandHandler("start",  cmd_start))
-    app.add_handler(CommandHandler("paola",  cmd_paola))
-    app.add_handler(CommandHandler("carlo",  cmd_carlo))
-    app.add_handler(CommandHandler("boris",  cmd_boris))
-    app.add_handler(CommandHandler("sandro", cmd_sandro))
-    app.add_handler(CommandHandler("team",   cmd_team))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.add_handler(MessageHandler(filters.Document.ALL, handle_message))
-
-    # Morning digest scheduler — 09:00 Europe/Rome every day
+async def post_init(app: Application) -> None:
+    """Called after the event loop is running — safe to start AsyncIOScheduler here."""
     scheduler = AsyncIOScheduler(timezone=pytz.timezone("Europe/Rome"))
     scheduler.add_job(
         send_morning_digest,
@@ -619,6 +608,24 @@ def main() -> None:
     )
     scheduler.start()
     logger.info("Scheduler started — morning digest at 09:00 Europe/Rome")
+
+
+def main() -> None:
+    app = (
+        Application.builder()
+        .token(TELEGRAM_TOKEN)
+        .post_init(post_init)
+        .build()
+    )
+
+    app.add_handler(CommandHandler("start",  cmd_start))
+    app.add_handler(CommandHandler("paola",  cmd_paola))
+    app.add_handler(CommandHandler("carlo",  cmd_carlo))
+    app.add_handler(CommandHandler("boris",  cmd_boris))
+    app.add_handler(CommandHandler("sandro", cmd_sandro))
+    app.add_handler(CommandHandler("team",   cmd_team))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(MessageHandler(filters.Document.ALL, handle_message))
 
     logger.info("Bot started")
     app.run_polling(drop_pending_updates=True)
