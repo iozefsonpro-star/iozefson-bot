@@ -76,6 +76,11 @@ AGENTS_PAGE_TITLE = "Агенты"
 PROMPT_CACHE_TTL  = 3600  # seconds
 HISTORY_LIMIT     = 10    # messages per user to keep
 
+# ---------------------------------------------------------------------------
+# Pending task actions  {user_id: {"title": str, "page_id": str}}
+# ---------------------------------------------------------------------------
+pending_task_action: dict[int, dict] = {}
+
 # Model routing: each agent uses the most appropriate Claude model
 AGENT_MODELS = {
     "paola":  "claude-haiku-4-5-20251001",  # fast & cheap: briefings, task lists
@@ -262,6 +267,68 @@ def build_notion_context(tasks: list[dict]) -> str:
         deadline = f", дедлайн {t['deadline']}" if t["deadline"] else ""
         lines.append(f"- {t['title']} [{t['priority']}{deadline}, {t['assignee']}]")
     return "\n".join(lines)
+
+
+def notion_update_deadline(page_id: str, new_date: str) -> None:
+    """Update task deadline by page_id."""
+    notion.pages.update(
+        page_id=page_id,
+        properties={"Дедлайн": {"date": {"start": new_date}}},
+    )
+
+
+def notion_get_done_today() -> list[dict]:
+    """Get tasks closed today (status=Done, last_edited today)."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    response = notion.databases.query(**{
+        "database_id": NOTION_TODOLIST_DB_ID,
+        "filter": {"property": "Статус", "select": {"equals": "Done"}},
+    })
+    tasks = []
+    for page in response.get("results", []):
+        edited = page.get("last_edited_time", "")[:10]
+        if edited != today:
+            continue
+        props = page.get("properties", {})
+        title = "".join(t.get("plain_text", "") for t in props.get("Задача", {}).get("title", []))
+        tasks.append({"id": page["id"], "title": title})
+    return tasks
+
+
+def notion_get_overdue() -> list[dict]:
+    """Get tasks with deadline today or earlier, status not Done."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    response = notion.databases.query(**{
+        "database_id": NOTION_TODOLIST_DB_ID,
+        "filter": {"and": [
+            {"or": [
+                {"property": "Статус", "select": {"equals": "To do"}},
+                {"property": "Статус", "select": {"equals": "In progress"}},
+            ]},
+            {"property": "Дедлайн", "date": {"on_or_before": today}},
+        ]},
+    })
+    tasks = []
+    for page in response.get("results", []):
+        props = page.get("properties", {})
+        title    = "".join(t.get("plain_text", "") for t in props.get("Задача", {}).get("title", []))
+        deadline = (props.get("Дедлайн", {}).get("date") or {}).get("start", "")
+        priority = (props.get("Приоритет", {}).get("select") or {}).get("name", "")
+        tasks.append({"id": page["id"], "title": title, "deadline": deadline, "priority": priority})
+    return tasks
+
+
+# ---------------------------------------------------------------------------
+# Markdown cleanup — applied to all Claude replies before sending
+# ---------------------------------------------------------------------------
+
+def clean_markdown(text: str) -> str:
+    text = text.replace("**", "")
+    text = text.replace("__", "")
+    text = text.replace("* ", "• ")   # bullet lists → •
+    text = text.replace("*", "")
+    text = text.replace("`", "")
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -524,33 +591,80 @@ async def _send_digest(bot: Bot, digest_type: str) -> None:
         logger.warning("OWNER_CHAT_ID not set, skipping %s digest", digest_type)
         return
     try:
-        tasks = notion_get_tasks()
         now_str = datetime.now(ROME_TZ).strftime("%d.%m.%Y (%A)")
-        prompt = fetch_agent_prompt("paola")
+        tomorrow = (datetime.now(ROME_TZ).date() + __import__("datetime").timedelta(days=1)).strftime("%Y-%m-%d")
+        prompt  = fetch_agent_prompt("paola")
 
         if digest_type == "morning":
+            tasks = notion_get_tasks()
+            events = get_calendar_events(days=7)
+            cal_context = format_calendar_events(events)
             digest_request = (
                 f"Сегодня {now_str}. Составь краткий утренний брифинг: "
                 "поприветствуй, перечисли активные задачи с приоритетами, "
-                "выдели самое важное на сегодня. Будь краткой и бодрой."
+                "выдели самое важное на сегодня. Будь краткой и бодрой. "
+                "Без Markdown, только plain text и эмодзи."
             )
-        else:
-            digest_request = (
-                f"Сегодня {now_str}. Составь краткую вечернюю сводку: "
-                "подведи итоги дня, напомни о незакрытых задачах, "
-                "предложи что стоит сделать завтра. Будь тёплой и поддерживающей."
+            system = (
+                prompt
+                + f"\n\nСЕГОДНЯШНЯЯ ДАТА: {now_str}."
+                + f"\n\n{build_notion_context(tasks)}"
+                + (f"\n\n{cal_context}" if cal_context else "")
             )
+            text = clean_markdown(ask_claude(system, digest_request, model=AGENT_MODELS["paola"]))
+            await bot.send_message(chat_id=int(OWNER_CHAT_ID), text=text)
 
-        events = get_calendar_events(days=7)
-        cal_context = format_calendar_events(events)
-        system = (
-            prompt
-            + f"\n\nСЕГОДНЯШНЯЯ ДАТА: {now_str}."
-            + f"\n\n{build_notion_context(tasks)}"
-            + (f"\n\n{cal_context}" if cal_context else "")
-        )
-        text = ask_claude(system, digest_request, model=AGENT_MODELS["paola"])
-        await bot.send_message(chat_id=int(OWNER_CHAT_ID), text=text)
+        else:
+            # Evening: done today + overdue tasks
+            done_today = notion_get_done_today()
+            overdue    = notion_get_overdue()
+            active     = notion_get_tasks()
+
+            # Build evening message manually — structured, no hallucinations
+            parts = [f"🌙 Вечерняя сводка — {now_str}\n"]
+
+            if done_today:
+                parts.append("✅ Выполнено сегодня:")
+                for t in done_today:
+                    parts.append(f"  • {t['title']}")
+                parts.append("")
+
+            if overdue:
+                parts.append("⚠️ Просрочено — нужно решить:")
+                for t in overdue:
+                    dl = f" (дедлайн {t['deadline']})" if t["deadline"] else ""
+                    parts.append(f"  • {t['title']}{dl} — перенести?")
+                parts.append("")
+
+            remaining = [t for t in active if t not in overdue]
+            if remaining:
+                icon_map = {"Срочное": "🔴", "Важное": "🟡", "Обычное": "🟢"}
+                parts.append("📋 Активные задачи:")
+                for t in remaining:
+                    icon = icon_map.get(t["priority"], "⚪")
+                    dl   = f" — до {t['deadline']}" if t["deadline"] else ""
+                    parts.append(f"  {icon} {t['title']}{dl}")
+                parts.append("")
+
+            # Ask Paola for a warm closing, no astro calendar in evening
+            digest_request = (
+                f"Сегодня {now_str}. Добавь тёплое завершение дня — 2-3 предложения "
+                "поддержки и мотивации на завтра. Без Markdown, plain text."
+            )
+            closing = clean_markdown(ask_claude(prompt, digest_request, model=AGENT_MODELS["paola"]))
+            parts.append(closing)
+
+            text = "\n".join(parts)
+
+            # Store overdue for interactive reschedule
+            if overdue and OWNER_CHAT_ID:
+                pending_task_action[int(OWNER_CHAT_ID)] = {
+                    "tasks": overdue,
+                    "awaiting": True,
+                }
+
+            await bot.send_message(chat_id=int(OWNER_CHAT_ID), text=text)
+
         logger.info("%s digest sent to %s", digest_type.capitalize(), OWNER_CHAT_ID)
     except Exception as e:
         logger.error("%s digest error: %s", digest_type, e)
@@ -672,10 +786,72 @@ async def _handle_single(
         await update.message.reply_text(f"Ошибка при загрузке промпта из Notion: {e}")
         return
 
-    # Paola-specific: show/close/delete tasks via keywords
+    # Paola-specific: interactive task management
     if agent_key == "paola":
         msg_lower = message.lower()
 
+        # --- Handle pending "Перенести?" responses from evening digest ---
+        if user_id in pending_task_action and pending_task_action[user_id].get("awaiting"):
+            pending = pending_task_action[user_id]
+            tasks_list = pending.get("tasks", [])
+            # Pick first overdue task for simplicity (user can repeat for next)
+            if tasks_list:
+                task = tasks_list[0]
+                page_id = task["id"]
+                title   = task["title"]
+                tomorrow_str = (__import__("datetime").date.today() +
+                                __import__("datetime").timedelta(days=1)).strftime("%Y-%m-%d")
+
+                handled = False
+
+                # Reschedule to tomorrow
+                if any(kw in msg_lower for kw in ["да", "перенеси", "перенести", "завтра"]):
+                    notion_update_deadline(page_id, tomorrow_str)
+                    await update.message.reply_text(f"✅ Перенесла на {tomorrow_str}: {title}")
+                    handled = True
+
+                # Reschedule to specific date via Claude parse
+                elif any(kw in msg_lower for kw in ["на ", "до "]):
+                    try:
+                        today = __import__("datetime").date.today().strftime("%Y-%m-%d")
+                        parse_resp = ask_claude(
+                            f"Сегодня {today}. Извлеки дату из сообщения и верни ТОЛЬКО дату в формате YYYY-MM-DD. "
+                            "Если дата не найдена — верни NONE.",
+                            message,
+                        ).strip()
+                        if parse_resp != "NONE" and len(parse_resp) == 10:
+                            notion_update_deadline(page_id, parse_resp)
+                            await update.message.reply_text(f"✅ Перенесла на {parse_resp}: {title}")
+                            handled = True
+                    except Exception as e:
+                        logger.error("Date parse error: %s", e)
+
+                # Close as done
+                if not handled and any(kw in msg_lower for kw in
+                                       ["нет, уже сделано", "закрой", "выполнено", "сделано"]):
+                    notion_close_task(title)
+                    await update.message.reply_text(f"✅ Закрыла как выполненное: {title}")
+                    handled = True
+
+                # Delete
+                if not handled and any(kw in msg_lower for kw in ["удали", "удалить"]):
+                    notion_delete_task(title)
+                    await update.message.reply_text(f"🗑 Удалила: {title}")
+                    handled = True
+
+                if handled:
+                    tasks_list.pop(0)
+                    if tasks_list:
+                        next_t = tasks_list[0]
+                        dl = f" (дедлайн {next_t['deadline']})" if next_t["deadline"] else ""
+                        await update.message.reply_text(
+                            f"Следующая: {next_t['title']}{dl} — перенести?"
+                        )
+                    else:
+                        del pending_task_action[user_id]
+                    return
+
+        # --- Keyword shortcuts ---
         if any(kw in msg_lower for kw in ["покажи задачи", "список задач", "мои задачи"]):
             try:
                 tasks = notion_get_tasks()
@@ -782,15 +958,18 @@ async def _handle_single(
                 # Send Claude's friendly reply first
                 try:
                     agent_model = AGENT_MODELS.get(agent_key, DEFAULT_MODEL)
-                    reply = ask_claude(prompt, message, get_history(user_id), model=agent_model)
+                    reply = clean_markdown(ask_claude(prompt, message, get_history(user_id), model=agent_model))
                     add_to_history(user_id, "user", message)
                     add_to_history(user_id, "assistant", reply)
                     await update.message.reply_text(reply)
                 except Exception:
                     pass
+                # Plain text task confirmation (no Markdown)
+                tasks_text = "\n".join(
+                    t.replace("*", "") for t in created_tasks
+                )
                 await update.message.reply_text(
-                    f"✅ Добавлено в Notion ({len(created_tasks)}):\n" + "\n".join(created_tasks),
-                    parse_mode="Markdown"
+                    f"✅ Добавлено в Notion ({len(created_tasks)}):\n{tasks_text}"
                 )
                 return
 
@@ -801,7 +980,7 @@ async def _handle_single(
     try:
         agent_model = AGENT_MODELS.get(agent_key, DEFAULT_MODEL)
         history = get_history(user_id)
-        reply   = ask_claude(prompt, message, history, model=agent_model)
+        reply   = clean_markdown(ask_claude(prompt, message, history, model=agent_model))
         logger.info("Agent %s using model %s", agent_key, agent_model)
     except Exception as e:
         logger.error("Claude API error: %s", e)
@@ -832,13 +1011,13 @@ async def _handle_team(
             continue
         try:
             agent_model = AGENT_MODELS.get(agent_key, DEFAULT_MODEL)
-            reply = ask_claude(prompt, message, history, model=agent_model, max_tokens=700)
+            reply = clean_markdown(ask_claude(prompt, message, history, model=agent_model, max_tokens=700))
             logger.info("Team agent %s using model %s", agent_key, agent_model)
         except Exception as e:
             logger.error("Claude API error for %s: %s", agent_key, e)
-            await update.message.reply_text(f"*{agent_name}*: Ошибка Claude API — {e}", parse_mode="Markdown")
+            await update.message.reply_text(f"{agent_name}: Ошибка Claude API — {e}")
             continue
-        await update.message.reply_text(f"*{agent_name}*:\n{reply}", parse_mode="Markdown")
+        await update.message.reply_text(f"{agent_name}:\n{reply}")
 
     # Save last exchange to history
     add_to_history(user_id, "user", message)
