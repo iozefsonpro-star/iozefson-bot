@@ -159,7 +159,7 @@ SECTION_MAP = {
 def notion_create_task(title: str, deadline: str | None, priority: str, section: str, assignee: str) -> dict:
     """Create a task in Notion To-do list database."""
     properties = {
-        "Name": {"title": [{"text": {"content": title}}]},
+        "Задача": {"title": [{"text": {"content": title}}]},
         "Приоритет": {"select": {"name": priority}},
         "Статус": {"select": {"name": "To Do"}},
         "Раздел": {"select": {"name": section}},
@@ -186,7 +186,7 @@ def notion_get_tasks() -> list[dict]:
     tasks = []
     for page in response.get("results", []):
         props = page.get("properties", {})
-        title = "".join(t.get("plain_text", "") for t in props.get("Name", {}).get("title", []))
+        title = "".join(t.get("plain_text", "") for t in props.get("Задача", {}).get("title", []))
         deadline = (props.get("Дедлайн", {}).get("date") or {}).get("start", "")
         priority = (props.get("Приоритет", {}).get("select") or {}).get("name", "")
         status = (props.get("Статус", {}).get("select") or {}).get("name", "")
