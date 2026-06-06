@@ -12,6 +12,8 @@ try:
 except ImportError:
     pass
 
+import json
+import tempfile
 import anthropic
 import httpx
 from telegram import Update, Document, Bot
@@ -23,6 +25,11 @@ from notion_client import Client as NotionClient
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 import pytz
+
+# Google Calendar
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
+from googleapiclient.discovery import build as gcal_build
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -40,7 +47,14 @@ TELEGRAM_TOKEN        = os.environ.get("TELEGRAM_TOKEN")
 ANTHROPIC_API_KEY     = os.environ.get("ANTHROPIC_API_KEY")
 NOTION_TOKEN          = os.environ.get("NOTION_TOKEN")
 NOTION_TODOLIST_DB_ID = os.environ.get("NOTION_TODOLIST_DB_ID")
-OWNER_CHAT_ID         = os.environ.get("OWNER_CHAT_ID")  # optional for morning digest
+OWNER_CHAT_ID         = os.environ.get("OWNER_CHAT_ID")
+
+# Google Calendar — credentials stored as env vars (never in git)
+GOOGLE_TOKEN_JSON      = os.environ.get("GOOGLE_TOKEN_JSON")       # content of token.json
+GOOGLE_CALENDAR_IDS    = [
+    "iozefson.pro@gmail.com",       # бизнес-календарь
+    "yulia.iozefson.a@gmail.com",   # личный календарь
+]
 
 _missing = [k for k, v in {
     "TELEGRAM_TOKEN": TELEGRAM_TOKEN,
@@ -278,6 +292,91 @@ def ask_claude(system_prompt: str, user_message: str,
 # ---------------------------------------------------------------------------
 # Morning digest (APScheduler)
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Google Calendar
+# ---------------------------------------------------------------------------
+GCAL_SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
+
+
+def _get_gcal_credentials() -> Credentials | None:
+    """Load Google OAuth credentials from GOOGLE_TOKEN_JSON env var."""
+    if not GOOGLE_TOKEN_JSON:
+        logger.warning("GOOGLE_TOKEN_JSON not set — calendar disabled")
+        return None
+    try:
+        token_data = json.loads(GOOGLE_TOKEN_JSON)
+        creds = Credentials.from_authorized_user_info(token_data, GCAL_SCOPES)
+        if creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+            logger.info("Google token refreshed")
+        return creds
+    except Exception as e:
+        logger.error("Google credentials error: %s", e)
+        return None
+
+
+def get_calendar_events(days: int = 1) -> list[dict]:
+    """
+    Return events for today (or next `days` days) from all configured calendars.
+    Each item: {time, title, calendar}
+    """
+    creds = _get_gcal_credentials()
+    if not creds:
+        return []
+
+    try:
+        service = gcal_build("calendar", "v3", credentials=creds, cache_discovery=False)
+        rome_tz = pytz.timezone("Europe/Rome")
+        now = datetime.now(rome_tz)
+        time_min = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        time_max = now.replace(hour=23, minute=59, second=59, microsecond=0).isoformat()
+
+        events = []
+        for cal_id in GOOGLE_CALENDAR_IDS:
+            try:
+                result = service.events().list(
+                    calendarId=cal_id,
+                    timeMin=time_min,
+                    timeMax=time_max,
+                    singleEvents=True,
+                    orderBy="startTime",
+                    maxResults=20,
+                ).execute()
+                for ev in result.get("items", []):
+                    start = ev["start"].get("dateTime", ev["start"].get("date", ""))
+                    # Format time
+                    if "T" in start:
+                        dt = datetime.fromisoformat(start)
+                        time_str = dt.astimezone(rome_tz).strftime("%H:%M")
+                    else:
+                        time_str = "весь день"
+                    events.append({
+                        "time":     time_str,
+                        "title":    ev.get("summary", "(без названия)"),
+                        "calendar": cal_id,
+                    })
+            except Exception as e:
+                logger.warning("Calendar %s error: %s", cal_id, e)
+
+        events.sort(key=lambda x: x["time"])
+        logger.info("Loaded %d calendar events", len(events))
+        return events
+    except Exception as e:
+        logger.error("Google Calendar error: %s", e)
+        return []
+
+
+def format_calendar_events(events: list[dict]) -> str:
+    """Format events for injection into system prompt (silent context)."""
+    if not events:
+        return ""
+    lines = ["Встречи и события сегодня:"]
+    for ev in events:
+        cal_label = "💼" if "pro" in ev["calendar"] else "👤"
+        lines.append(f"  {cal_label} {ev['time']} — {ev['title']}")
+    return "\n".join(lines)
+
+
 ROME_TZ = pytz.timezone("Europe/Rome")
 
 
@@ -304,10 +403,13 @@ async def _send_digest(bot: Bot, digest_type: str) -> None:
                 "предложи что стоит сделать завтра. Будь тёплой и поддерживающей."
             )
 
+        events = get_calendar_events(days=1)
+        cal_context = format_calendar_events(events)
         system = (
             prompt
             + f"\n\nСЕГОДНЯШНЯЯ ДАТА: {now_str}."
             + f"\n\n{build_notion_context(tasks)}"
+            + (f"\n\n{cal_context}" if cal_context else "")
         )
         text = ask_claude(system, digest_request, model=AGENT_MODELS["paola"])
         await bot.send_message(chat_id=int(OWNER_CHAT_ID), text=text)
@@ -474,7 +576,7 @@ async def _handle_single(
                             logger.error("Notion delete task error: %s", e)
                     break
 
-        # Inject date + tasks silently into system prompt
+        # Inject date + tasks + calendar silently into system prompt
         today_str = datetime.now().strftime("%d.%m.%Y (%A)")
         prompt = prompt + f"\n\nСЕГОДНЯШНЯЯ ДАТА: {today_str}."
         try:
@@ -482,6 +584,13 @@ async def _handle_single(
             prompt = prompt + f"\n\n{build_notion_context(tasks)}"
         except Exception as e:
             logger.warning("Could not load tasks for context: %s", e)
+        try:
+            events = get_calendar_events(days=1)
+            cal_context = format_calendar_events(events)
+            if cal_context:
+                prompt = prompt + f"\n\n{cal_context}"
+        except Exception as e:
+            logger.warning("Could not load calendar for context: %s", e)
 
     # Paola: detect task creation intent via Claude
     if agent_key == "paola":
