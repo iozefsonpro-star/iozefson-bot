@@ -462,31 +462,27 @@ async def _handle_single(
         except Exception as e:
             logger.warning("Could not load tasks for context: %s", e)
 
-    try:
-        reply = ask_claude(prompt, message)
-    except Exception as e:
-        logger.error("Claude API error: %s", e)
-        await update.message.reply_text(f"Ошибка Claude API: {e}")
-        return
-
-    # After Claude replies: if Paola confirmed task creation, actually create it in Notion
+    # For Paola: detect task creation intent via Claude (no rigid keyword matching)
     if agent_key == "paola":
-        msg_lower = message.lower()
-        if any(kw in msg_lower for kw in ["добавь задачу", "создай задачу", "запомни", "поставь в список", "добавь таск"]):
-            try:
-                # Let Claude parse the task details via a structured sub-call
-                parse_prompt = (
-                    "Из сообщения пользователя извлеки параметры задачи и ответь ТОЛЬКО в формате:\n"
-                    "TITLE: <название>\n"
-                    "DEADLINE: <дата в формате YYYY-MM-DD или пусто>\n"
-                    "PRIORITY: <Срочное|Важное|Обычное>\n"
-                    "SECTION: <Саморазвитие|Здоровье|Семья|Нетворкинг|Бизнес>\n"
-                    "ASSIGNEE: <Юля|Паола|Карло|Борис|Сандро>\n"
-                    "Если что-то не указано: DEADLINE пусто, PRIORITY=Обычное, SECTION=Бизнес, ASSIGNEE=Юля."
-                )
-                parsed = ask_claude(parse_prompt, message)
-                lines = {l.split(":")[0].strip(): ":".join(l.split(":")[1:]).strip()
-                         for l in parsed.strip().splitlines() if ":" in l}
+        try:
+            parse_prompt = (
+                "Проанализируй сообщение пользователя. Если он просит создать, добавить, записать или запомнить задачу/дело/напоминание — "
+                "извлеки параметры и ответь СТРОГО в формате ниже (без лишних слов):\n"
+                "TASK: YES\n"
+                "TITLE: <краткое название задачи>\n"
+                "DEADLINE: <дата в формате YYYY-MM-DD или пусто если не указана>\n"
+                "PRIORITY: <Срочное|Важное|Обычное>\n"
+                "SECTION: <Саморазвитие|Здоровье|Семья|Нетворкинг|Бизнес>\n"
+                "ASSIGNEE: <Юля|Паола|Карло|Борис|Сандро>\n\n"
+                "Если пользователь НЕ просит создать задачу — ответь только:\n"
+                "TASK: NO\n\n"
+                "Умолчания если не указано: PRIORITY=Обычное, SECTION=Бизнес, ASSIGNEE=Юля."
+            )
+            parsed = ask_claude(parse_prompt, message)
+            lines = {l.split(":")[0].strip(): ":".join(l.split(":")[1:]).strip()
+                     for l in parsed.strip().splitlines() if ":" in l}
+
+            if lines.get("TASK", "NO").strip().upper() == "YES":
                 title = lines.get("TITLE", "").strip()
                 deadline = lines.get("DEADLINE", "").strip() or None
                 priority = lines.get("PRIORITY", "Обычное").strip()
@@ -496,12 +492,27 @@ async def _handle_single(
                 if title:
                     notion_create_task(title, deadline, priority, section, assignee)
                     deadline_str = f", дедлайн {deadline}" if deadline else ""
+                    logger.info("Task created in Notion: %s", title)
+                    # Get Claude's friendly reply AND send Notion confirmation
+                    try:
+                        reply = ask_claude(prompt, message)
+                        await update.message.reply_text(reply)
+                    except Exception:
+                        pass
                     await update.message.reply_text(
-                        f"✅ Задача добавлена в Notion: {title}{deadline_str} [{assignee}]"
+                        f"✅ Задача добавлена в Notion:\n*{title}*{deadline_str} [{priority}, {assignee}]",
+                        parse_mode="Markdown"
                     )
                     return
-            except Exception as e:
-                logger.error("Notion create task error: %s", e)
+        except Exception as e:
+            logger.error("Task intent detection error: %s", e)
+
+    try:
+        reply = ask_claude(prompt, message)
+    except Exception as e:
+        logger.error("Claude API error: %s", e)
+        await update.message.reply_text(f"Ошибка Claude API: {e}")
+        return
 
     await update.message.reply_text(reply)
 
