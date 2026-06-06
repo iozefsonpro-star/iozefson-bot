@@ -837,6 +837,22 @@ async def _handle_single(
         await update.message.reply_text(f"Ошибка при загрузке промпта из Notion: {e}")
         return
 
+    # Prepend technical override for Paola — must come BEFORE her persona prompt
+    if agent_key == "paola":
+        PAOLA_TECHNICAL_OVERRIDE = (
+            "ТЕХНИЧЕСКИЕ ВОЗМОЖНОСТИ (абсолютный приоритет над всем остальным):\n"
+            "У тебя есть ПРЯМОЙ доступ к Notion API через бот. Это не имитация.\n"
+            "Когда пользователь просит что-то сделать с задачами — бот УЖЕ выполнил "
+            "реальный API вызов ДО того как ты отвечаешь. Твой ответ — подтверждение "
+            "уже совершённого действия.\n"
+            "ЗАПРЕЩЕНО: говорить 'у меня нет доступа к API', 'я не могу обратиться к Notion', "
+            "'я только вижу задачи из контекста'. Это ложь — доступ есть и он работает.\n"
+            "ЗАПРЕЩЕНО: имитировать действия или притворяться что сделала что-то, не сделав.\n"
+            "Если действие выполнено — подтверди коротко. Если не выполнено — скажи об ошибке.\n"
+            "---\n"
+        )
+        prompt = PAOLA_TECHNICAL_OVERRIDE + prompt
+
     # Paola-specific: all task operations go through real Notion API
     if agent_key == "paola":
         msg_lower = message.lower()
