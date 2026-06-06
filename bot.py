@@ -278,31 +278,50 @@ def ask_claude(system_prompt: str, user_message: str,
 # ---------------------------------------------------------------------------
 # Morning digest (APScheduler)
 # ---------------------------------------------------------------------------
-async def send_morning_digest(bot: Bot) -> None:
+ROME_TZ = pytz.timezone("Europe/Rome")
+
+
+async def _send_digest(bot: Bot, digest_type: str) -> None:
+    """Send morning or evening digest to OWNER_CHAT_ID."""
     if not OWNER_CHAT_ID:
-        logger.warning("OWNER_CHAT_ID not set, skipping morning digest")
+        logger.warning("OWNER_CHAT_ID not set, skipping %s digest", digest_type)
         return
     try:
         tasks = notion_get_tasks()
-        today = datetime.now(pytz.timezone("Europe/Rome")).strftime("%d.%m.%Y")
+        now_str = datetime.now(ROME_TZ).strftime("%d.%m.%Y (%A)")
         prompt = fetch_agent_prompt("paola")
-        digest_request = (
-            f"Сегодня {today}. Составь краткую утреннюю сводку для пользователя: "
-            "поприветствуй, перечисли активные задачи с приоритетами, "
-            "выдели самое важное на сегодня. Будь краткой и бодрой."
-        )
-        today_str = datetime.now(pytz.timezone("Europe/Rome")).strftime("%d.%m.%Y (%A)")
-        task_context = build_notion_context(tasks)
+
+        if digest_type == "morning":
+            digest_request = (
+                f"Сегодня {now_str}. Составь краткий утренний брифинг: "
+                "поприветствуй, перечисли активные задачи с приоритетами, "
+                "выдели самое важное на сегодня. Будь краткой и бодрой."
+            )
+        else:
+            digest_request = (
+                f"Сегодня {now_str}. Составь краткую вечернюю сводку: "
+                "подведи итоги дня, напомни о незакрытых задачах, "
+                "предложи что стоит сделать завтра. Будь тёплой и поддерживающей."
+            )
+
         system = (
             prompt
-            + f"\n\nСЕГОДНЯШНЯЯ ДАТА: {today_str}."
-            + f"\n\n{task_context}"
+            + f"\n\nСЕГОДНЯШНЯЯ ДАТА: {now_str}."
+            + f"\n\n{build_notion_context(tasks)}"
         )
-        text = ask_claude(system, digest_request)
+        text = ask_claude(system, digest_request, model=AGENT_MODELS["paola"])
         await bot.send_message(chat_id=int(OWNER_CHAT_ID), text=text)
-        logger.info("Morning digest sent to %s", OWNER_CHAT_ID)
+        logger.info("%s digest sent to %s", digest_type.capitalize(), OWNER_CHAT_ID)
     except Exception as e:
-        logger.error("Morning digest error: %s", e)
+        logger.error("%s digest error: %s", digest_type, e)
+
+
+async def send_morning_digest(bot: Bot) -> None:
+    await _send_digest(bot, "morning")
+
+
+async def send_evening_digest(bot: Bot) -> None:
+    await _send_digest(bot, "evening")
 
 
 # ---------------------------------------------------------------------------
@@ -615,16 +634,23 @@ async def extract_text_from_document(doc: Document, bot) -> str:
 
 async def post_init(app: Application) -> None:
     """Called after the event loop is running — safe to start AsyncIOScheduler here."""
-    scheduler = AsyncIOScheduler(timezone=pytz.timezone("Europe/Rome"))
+    scheduler = AsyncIOScheduler(timezone=ROME_TZ)
     scheduler.add_job(
         send_morning_digest,
-        trigger=CronTrigger(hour=9, minute=0, timezone=pytz.timezone("Europe/Rome")),
+        trigger=CronTrigger(hour=8, minute=0, timezone=ROME_TZ),
         args=[app.bot],
         id="morning_digest",
         replace_existing=True,
     )
+    scheduler.add_job(
+        send_evening_digest,
+        trigger=CronTrigger(hour=21, minute=0, timezone=ROME_TZ),
+        args=[app.bot],
+        id="evening_digest",
+        replace_existing=True,
+    )
     scheduler.start()
-    logger.info("Scheduler started — morning digest at 09:00 Europe/Rome")
+    logger.info("Scheduler started — morning 08:00 / evening 21:00 Europe/Rome")
 
 
 def main() -> None:
