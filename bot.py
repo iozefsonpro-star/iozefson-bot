@@ -293,26 +293,26 @@ def ask_claude(system_prompt: str, user_message: str,
 # ---------------------------------------------------------------------------
 GCAL_SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
 
-# Single source account — all calendars visible through it
+# Single source account
 GCAL_ACCOUNT = "yulia.iozefson.a@gmail.com"
 
-# Calendar name → (emoji, label) mapping; order defines display order
+# Display order: (calendar_name, emoji, label)
 GCAL_CATEGORIES = [
-    ("Business",           "💼", "Бизнес"),
-    ("Salute",             "🏥", "Здоровье"),
-    ("Networking",         "🤝", "Нетворкинг"),
-    ("Beauty",             "💅", "Бьюти"),
-    ("Viaggi",             "✈️", "Поездки"),
-    ("Астро-календарь",    "🌙", "Астро-календарь"),
-    ("Mental efficiency",  "🧠", "Mental efficiency"),
+    ("Business",          "💼", "Бизнес"),
+    ("Networking",        "🤝", "Нетворкинг"),
+    ("Salute",            "🏥", "Здоровье"),
+    ("Beauty",            "💅", "Бьюти"),
+    ("Mental efficiency", "🧠", "Mental efficiency"),
+    ("Viaggi",            "✈️", "Поездки"),
+    ("Астро-календарь",   "🌙", "Астро-календарь"),
 ]
-GCAL_OTHER_EMOJI  = "📌"
-GCAL_OTHER_LABEL  = "Остальное"
-GCAL_SKIP = {"Tasks"}  # never show
+GCAL_KNOWN_NAMES = {c[0] for c in GCAL_CATEGORIES} | {"My calendar", "Birthday"}
+GCAL_SKIP        = {"Tasks", "Ciclo Yuliya", "Work Vin"}  # never show
+GENERALI_DOMAIN  = "@agmonza.it"
+LONG_EVENT_DAYS  = 3   # events longer than this → "В процессе"
 
 
 def _get_gcal_credentials() -> Credentials | None:
-    """Load Google OAuth credentials from GOOGLE_TOKEN_JSON env var."""
     if not GOOGLE_TOKEN_JSON:
         logger.warning("GOOGLE_TOKEN_JSON not set — calendar disabled")
         return None
@@ -328,10 +328,36 @@ def _get_gcal_credentials() -> Credentials | None:
         return None
 
 
-def get_calendar_events(days: int = 7) -> dict[str, list[dict]]:
+def _fmt_time_range(ev: dict, rome_tz) -> tuple[str, str, str]:
+    """Return (date_str, time_range_str, sort_key) for an event."""
+    from datetime import timedelta
+    start_raw = ev["start"].get("dateTime", ev["start"].get("date", ""))
+    end_raw   = ev["end"].get("dateTime",   ev["end"].get("date",   ""))
+
+    if "T" in start_raw:
+        dt_start   = datetime.fromisoformat(start_raw).astimezone(rome_tz)
+        dt_end     = datetime.fromisoformat(end_raw).astimezone(rome_tz)
+        date_str   = dt_start.strftime("%d.%m (%a)")
+        time_range = f"{dt_start.strftime('%H:%M')}–{dt_end.strftime('%H:%M')}"
+        sort_key   = dt_start.isoformat()
+        duration_d = (dt_end - dt_start).days
+    else:
+        from datetime import date as date_cls
+        d_start  = date_cls.fromisoformat(start_raw)
+        d_end    = date_cls.fromisoformat(end_raw)
+        date_str = d_start.strftime("%d.%m (%a)")
+        time_range = "весь день"
+        sort_key   = start_raw
+        duration_d = (d_end - d_start).days
+
+    return date_str, time_range, sort_key, duration_d, end_raw
+
+
+def get_calendar_events(days: int = 7) -> dict:
     """
-    Return events for the next `days` days grouped by calendar name.
-    Result: {"Business": [{date, time, title}, ...], ...}
+    Returns dict with keys matching GCAL_CATEGORIES names + "Generali", "Остальное",
+    "В процессе", "Дни рождения".
+    Each value: list of event dicts.
     """
     creds = _get_gcal_credentials()
     if not creds:
@@ -345,9 +371,9 @@ def get_calendar_events(days: int = 7) -> dict[str, list[dict]]:
         time_min = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
         time_max = (now + timedelta(days=days)).replace(hour=23, minute=59, second=59).isoformat()
 
-        # Fetch all calendars for this account
         cal_list = service.calendarList().list().execute().get("items", [])
-        grouped: dict[str, list[dict]] = {}
+
+        grouped: dict[str, list] = {}
 
         for cal in cal_list:
             cal_name = cal.get("summary", "")
@@ -361,71 +387,111 @@ def get_calendar_events(days: int = 7) -> dict[str, list[dict]]:
                     timeMax=time_max,
                     singleEvents=True,
                     orderBy="startTime",
-                    maxResults=15,
+                    maxResults=20,
                 ).execute()
-                items = result.get("items", [])
-                if not items:
-                    continue
-                grouped[cal_name] = []
-                for ev in items:
-                    start = ev["start"].get("dateTime", ev["start"].get("date", ""))
-                    if "T" in start:
-                        dt       = datetime.fromisoformat(start).astimezone(rome_tz)
-                        date_str = dt.strftime("%d.%m (%a)")
-                        time_str = dt.strftime("%H:%M")
-                        sort_key = dt.isoformat()
+                for ev in result.get("items", []):
+                    title = ev.get("summary", "(без названия)")
+
+                    # Filter BBR slots
+                    if title.strip().upper() == "BBR":
+                        continue
+
+                    date_str, time_range, sort_key, duration_d, end_raw = \
+                        _fmt_time_range(ev, rome_tz)
+
+                    item = {
+                        "date":      date_str,
+                        "time":      time_range,
+                        "title":     title,
+                        "end_raw":   end_raw,
+                        "duration":  duration_d,
+                        "_sort":     sort_key,
+                    }
+
+                    # Long events → "В процессе"
+                    if duration_d >= LONG_EVENT_DAYS:
+                        grouped.setdefault("В процессе", []).append(item)
+                        continue
+
+                    # Birthdays
+                    if cal_name == "Birthday":
+                        grouped.setdefault("Дни рождения", []).append(item)
+                        continue
+
+                    # Generali: check attendees domain
+                    attendees = ev.get("attendees", [])
+                    is_generali = any(
+                        GENERALI_DOMAIN in a.get("email", "") for a in attendees
+                    )
+                    if is_generali:
+                        grouped.setdefault("Generali", []).append(item)
+                        continue
+
+                    # Known calendars
+                    if cal_name in GCAL_KNOWN_NAMES:
+                        grouped.setdefault(cal_name, []).append(item)
                     else:
-                        date_str = start
-                        time_str = "весь день"
-                        sort_key = start
-                    grouped[cal_name].append({
-                        "date":  date_str,
-                        "time":  time_str,
-                        "title": ev.get("summary", "(без названия)"),
-                        "_sort": sort_key,
-                    })
-                grouped[cal_name].sort(key=lambda x: x["_sort"])
+                        grouped.setdefault("Остальное", []).append(item)
+
             except Exception as e:
                 logger.warning("Calendar '%s' error: %s", cal_name, e)
 
+        # Sort each group
+        for evs in grouped.values():
+            evs.sort(key=lambda x: x["_sort"])
+
         total = sum(len(v) for v in grouped.values())
-        logger.info("Loaded %d calendar events across %d calendars", total, len(grouped))
+        logger.info("Loaded %d calendar events", total)
         return grouped
     except Exception as e:
         logger.error("Google Calendar error: %s", e)
         return {}
 
 
-def format_calendar_events(grouped: dict[str, list[dict]]) -> str:
-    """
-    Format grouped events for injection into Paola's system prompt.
-    Only shows calendars that have events. Returns empty string if no events at all.
-    """
+def format_calendar_events(grouped: dict) -> str:
+    """Format for Paola's system prompt. Empty groups are skipped."""
     if not grouped:
         return ""
 
     lines = ["📅 События на ближайшие 7 дней:"]
-    shown_names = set()
 
-    # Show in defined order first
+    def add_block(emoji, label, evs):
+        if not evs:
+            return
+        lines.append(f"\n{emoji} {label}:")
+        for ev in evs:
+            lines.append(f"  - {ev['date']} {ev['time']} — {ev['title']}")
+
+    # Generali first
+    add_block("🏢", "Generali", grouped.get("Generali", []))
+
+    # Known categories in order
     for cal_name, emoji, label in GCAL_CATEGORIES:
-        if cal_name in grouped:
-            lines.append(f"\n{emoji} {label}:")
-            for ev in grouped[cal_name]:
-                lines.append(f"  - {ev['date']} {ev['time']} — {ev['title']}")
-            shown_names.add(cal_name)
+        add_block(emoji, label, grouped.get(cal_name, []))
 
-    # Remaining calendars → "Остальное"
-    other_events = []
-    for cal_name, evs in grouped.items():
-        if cal_name not in shown_names:
-            for ev in evs:
-                other_events.append((ev["_sort"], cal_name, ev))
-    if other_events:
-        other_events.sort(key=lambda x: x[0])
-        lines.append(f"\n{GCAL_OTHER_EMOJI} {GCAL_OTHER_LABEL}:")
-        for _, cal_name, ev in other_events:
-            lines.append(f"  - {ev['date']} {ev['time']} — {ev['title']} [{cal_name}]")
+    # My calendar + other unknowns
+    other = grouped.get("My calendar", []) + grouped.get("Остальное", [])
+    other.sort(key=lambda x: x["_sort"])
+    add_block("📌", "Остальное", other)
+
+    # Long events
+    if grouped.get("В процессе"):
+        lines.append("\n📚 В процессе:")
+        for ev in grouped["В процессе"]:
+            try:
+                from datetime import date as date_cls
+                end_d = date_cls.fromisoformat(ev["end_raw"][:10])
+                end_fmt = end_d.strftime("до %d %b").replace(
+                    "Jan","янв").replace("Feb","фев").replace("Mar","мар").replace(
+                    "Apr","апр").replace("May","май").replace("Jun","июн").replace(
+                    "Jul","июл").replace("Aug","авг").replace("Sep","сен").replace(
+                    "Oct","окт").replace("Nov","ноя").replace("Dec","дек")
+            except Exception:
+                end_fmt = f"до {ev['end_raw'][:10]}"
+            lines.append(f"  - {ev['title']} ({end_fmt})")
+
+    # Birthdays last
+    add_block("🎂", "Дни рождения", grouped.get("Дни рождения", []))
 
     return "\n".join(lines)
 
