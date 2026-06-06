@@ -454,7 +454,9 @@ async def _handle_single(
                             logger.error("Notion delete task error: %s", e)
                     break
 
-        # Inject current tasks into prompt so Paola is aware
+        # Inject current date + tasks into prompt so Paola is aware
+        today_str = datetime.now().strftime("%d.%m.%Y (%A)")
+        prompt = prompt + f"\n\nСЕГОДНЯШНЯЯ ДАТА: {today_str}."
         try:
             tasks = notion_get_tasks()
             task_context = build_notion_context(tasks)
@@ -465,24 +467,36 @@ async def _handle_single(
     # For Paola: detect task creation intent via Claude (no rigid keyword matching)
     if agent_key == "paola":
         try:
+            today = datetime.now().strftime("%Y-%m-%d")
+            weekday = datetime.now().strftime("%A")  # Monday, Tuesday...
             parse_prompt = (
-                "Проанализируй сообщение пользователя. Если он просит создать, добавить, записать или запомнить задачу/дело/напоминание — "
-                "извлеки параметры и ответь СТРОГО в формате ниже (без лишних слов):\n"
+                f"Сегодняшняя дата: {today} ({weekday}).\n"
+                "Проанализируй сообщение пользователя. Если он просит создать, добавить, записать или запомнить одну или несколько задач/дел/напоминаний — "
+                "извлеки параметры КАЖДОЙ задачи отдельно и ответь СТРОГО в формате ниже (без лишних слов).\n"
+                "Для каждой задачи — отдельный блок, разделённый строкой '---':\n\n"
                 "TASK: YES\n"
                 "TITLE: <краткое название задачи>\n"
-                "DEADLINE: <дата в формате YYYY-MM-DD или пусто если не указана>\n"
+                "DEADLINE: <дата в формате YYYY-MM-DD, вычисли точную дату если написано 'завтра'/'в пятницу' и т.д., или пусто если не указана>\n"
                 "PRIORITY: <Срочное|Важное|Обычное>\n"
                 "SECTION: <Саморазвитие|Здоровье|Семья|Нетворкинг|Бизнес>\n"
                 "ASSIGNEE: <Юля|Паола|Карло|Борис|Сандро>\n\n"
-                "Если пользователь НЕ просит создать задачу — ответь только:\n"
+                "Если пользователь НЕ просит создать задачи — ответь только:\n"
                 "TASK: NO\n\n"
                 "Умолчания если не указано: PRIORITY=Обычное, SECTION=Бизнес, ASSIGNEE=Юля."
             )
             parsed = ask_claude(parse_prompt, message)
-            lines = {l.split(":")[0].strip(): ":".join(l.split(":")[1:]).strip()
-                     for l in parsed.strip().splitlines() if ":" in l}
 
-            if lines.get("TASK", "NO").strip().upper() == "YES":
+            # Split into task blocks by '---'
+            blocks = [b.strip() for b in parsed.strip().split("---") if b.strip()]
+            created_tasks = []
+
+            for block in blocks:
+                lines = {l.split(":")[0].strip(): ":".join(l.split(":")[1:]).strip()
+                         for l in block.splitlines() if ":" in l}
+
+                if lines.get("TASK", "NO").strip().upper() != "YES":
+                    continue
+
                 title = lines.get("TITLE", "").strip()
                 deadline = lines.get("DEADLINE", "").strip() or None
                 priority = lines.get("PRIORITY", "Обычное").strip()
@@ -491,19 +505,23 @@ async def _handle_single(
 
                 if title:
                     notion_create_task(title, deadline, priority, section, assignee)
-                    deadline_str = f", дедлайн {deadline}" if deadline else ""
+                    deadline_str = f", до {deadline}" if deadline else ""
                     logger.info("Task created in Notion: %s", title)
-                    # Get Claude's friendly reply AND send Notion confirmation
-                    try:
-                        reply = ask_claude(prompt, message)
-                        await update.message.reply_text(reply)
-                    except Exception:
-                        pass
-                    await update.message.reply_text(
-                        f"✅ Задача добавлена в Notion:\n*{title}*{deadline_str} [{priority}, {assignee}]",
-                        parse_mode="Markdown"
-                    )
-                    return
+                    created_tasks.append(f"• *{title}*{deadline_str} [{priority}, {assignee}]")
+
+            if created_tasks:
+                try:
+                    reply = ask_claude(prompt, message)
+                    await update.message.reply_text(reply)
+                except Exception:
+                    pass
+                tasks_text = "\n".join(created_tasks)
+                await update.message.reply_text(
+                    f"✅ Добавлено в Notion ({len(created_tasks)}):\n{tasks_text}",
+                    parse_mode="Markdown"
+                )
+                return
+
         except Exception as e:
             logger.error("Task intent detection error: %s", e)
 
