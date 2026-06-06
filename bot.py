@@ -2,8 +2,8 @@ import os
 import io
 import logging
 import time
-import asyncio
-from datetime import datetime, timedelta
+from collections import deque
+from datetime import datetime
 
 # Load .env file if present (local dev); on Railway env vars are injected directly
 try:
@@ -14,12 +14,15 @@ except ImportError:
 
 import anthropic
 import httpx
-from telegram import Update, Document
+from telegram import Update, Document, Bot
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     filters, ContextTypes
 )
 from notion_client import Client as NotionClient
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
+import pytz
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -33,10 +36,11 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
-NOTION_TOKEN = os.environ.get("NOTION_TOKEN")
+TELEGRAM_TOKEN        = os.environ.get("TELEGRAM_TOKEN")
+ANTHROPIC_API_KEY     = os.environ.get("ANTHROPIC_API_KEY")
+NOTION_TOKEN          = os.environ.get("NOTION_TOKEN")
 NOTION_TODOLIST_DB_ID = os.environ.get("NOTION_TODOLIST_DB_ID")
+OWNER_CHAT_ID         = os.environ.get("OWNER_CHAT_ID")  # optional for morning digest
 
 _missing = [k for k, v in {
     "TELEGRAM_TOKEN": TELEGRAM_TOKEN,
@@ -52,21 +56,37 @@ if _missing:
     )
 
 AGENTS = {
-    "paola": "Паола — Личный ассистент",
-    "carlo": "Карло — Контент",
-    "boris": "Борис — Аналитик",
+    "paola":  "Паола — Личный ассистент",
+    "carlo":  "Карло — Контент",
+    "boris":  "Борис — Аналитик",
     "sandro": "Сандро — Разработчик",
 }
 
 AGENTS_PAGE_TITLE = "Агенты"
-PROMPT_CACHE_TTL = 3600  # seconds
+PROMPT_CACHE_TTL  = 3600  # seconds
+HISTORY_LIMIT     = 10    # messages per user to keep
+
+# ---------------------------------------------------------------------------
+# Conversation history  {user_id: deque([{role, content}, ...])}
+# ---------------------------------------------------------------------------
+user_histories: dict[int, deque] = {}
+
+
+def get_history(user_id: int) -> list[dict]:
+    return list(user_histories.get(user_id, []))
+
+
+def add_to_history(user_id: int, role: str, content: str) -> None:
+    if user_id not in user_histories:
+        user_histories[user_id] = deque(maxlen=HISTORY_LIMIT)
+    user_histories[user_id].append({"role": role, "content": content})
+
 
 # ---------------------------------------------------------------------------
 # Notion helpers
 # ---------------------------------------------------------------------------
 notion = NotionClient(auth=NOTION_TOKEN)
 
-# Cache: {agent_key: (prompt_text, fetched_at_timestamp)}
 _prompt_cache: dict[str, tuple[str, float]] = {}
 
 
@@ -134,35 +154,17 @@ def fetch_agent_prompt(agent_key: str) -> str:
     _prompt_cache[agent_key] = (prompt, time.time())
     return prompt
 
+
 # ---------------------------------------------------------------------------
 # To-do list Notion functions
 # ---------------------------------------------------------------------------
 
-PRIORITY_MAP = {
-    "срочное": "Срочное", "срочно": "Срочное",
-    "важное": "Важное", "важно": "Важное",
-    "обычное": "Обычное", "обычно": "Обычное",
-}
-
-ASSIGNEE_MAP = {
-    "юля": "Юля", "я": "Юля",
-    "паола": "Паола", "карло": "Карло",
-    "борис": "Борис", "сандро": "Сандро",
-}
-
-SECTION_MAP = {
-    "саморазвитие": "Саморазвитие", "здоровье": "Здоровье",
-    "семья": "Семья", "нетворкинг": "Нетворкинг", "бизнес": "Бизнес",
-}
-
-
 def notion_create_task(title: str, deadline: str | None, priority: str, section: str, assignee: str) -> dict:
-    """Create a task in Notion To-do list database."""
     properties = {
-        "Задача": {"title": [{"text": {"content": title}}]},
-        "Приоритет": {"select": {"name": priority}},
-        "Статус": {"select": {"name": "To do"}},
-        "Раздел": {"select": {"name": section}},
+        "Задача":     {"title": [{"text": {"content": title}}]},
+        "Приоритет":  {"select": {"name": priority}},
+        "Статус":     {"select": {"name": "To do"}},
+        "Раздел":     {"select": {"name": section}},
         "Кто делает": {"multi_select": [{"name": assignee}]},
     }
     if deadline:
@@ -174,7 +176,6 @@ def notion_create_task(title: str, deadline: str | None, priority: str, section:
 
 
 def notion_get_tasks() -> list[dict]:
-    """Get active tasks (To Do + In Progress) from Notion."""
     response = notion.databases.query(**{
         "database_id": NOTION_TODOLIST_DB_ID,
         "filter": {"or": [
@@ -186,10 +187,10 @@ def notion_get_tasks() -> list[dict]:
     tasks = []
     for page in response.get("results", []):
         props = page.get("properties", {})
-        title = "".join(t.get("plain_text", "") for t in props.get("Задача", {}).get("title", []))
+        title    = "".join(t.get("plain_text", "") for t in props.get("Задача", {}).get("title", []))
         deadline = (props.get("Дедлайн", {}).get("date") or {}).get("start", "")
         priority = (props.get("Приоритет", {}).get("select") or {}).get("name", "")
-        status = (props.get("Статус", {}).get("select") or {}).get("name", "")
+        status   = (props.get("Статус", {}).get("select") or {}).get("name", "")
         assignee = ", ".join(o["name"] for o in props.get("Кто делает", {}).get("multi_select", []))
         tasks.append({"id": page["id"], "title": title, "deadline": deadline,
                       "priority": priority, "status": status, "assignee": assignee})
@@ -197,7 +198,6 @@ def notion_get_tasks() -> list[dict]:
 
 
 def notion_close_task(title: str) -> bool:
-    """Set task status to Done by title."""
     results = notion.databases.query(**{
         "database_id": NOTION_TODOLIST_DB_ID,
         "filter": {"property": "Задача", "rich_text": {"contains": title}},
@@ -210,7 +210,6 @@ def notion_close_task(title: str) -> bool:
 
 
 def notion_delete_task(title: str) -> bool:
-    """Archive (delete) task by title."""
     results = notion.databases.query(**{
         "database_id": NOTION_TODOLIST_DB_ID,
         "filter": {"property": "Задача", "rich_text": {"contains": title}},
@@ -222,13 +221,12 @@ def notion_delete_task(title: str) -> bool:
 
 
 def format_tasks_list(tasks: list[dict]) -> str:
-    """Format tasks list for Telegram message."""
     if not tasks:
         return "✅ Активных задач нет."
     icon_map = {"Срочное": "🔴", "Важное": "🟡", "Обычное": "🟢"}
     lines = ["📋 Активные задачи:\n"]
     for t in tasks:
-        icon = icon_map.get(t["priority"], "⚪")
+        icon     = icon_map.get(t["priority"], "⚪")
         deadline = f" — до {t['deadline']}" if t["deadline"] else ""
         assignee = f" [{t['assignee']}]" if t["assignee"] else ""
         lines.append(f"{icon} {t['title']}{deadline}{assignee}")
@@ -236,73 +234,63 @@ def format_tasks_list(tasks: list[dict]) -> str:
 
 
 def build_notion_context(tasks: list[dict]) -> str:
-    """Build task summary to inject into Claude system prompt."""
+    """Silent context injected into system prompt — never shown to user."""
     if not tasks:
         return "To-do list пуст."
-    lines = ["Текущие задачи в To-do list:"]
+    lines = ["Текущие задачи пользователя:"]
     for t in tasks:
         deadline = f", дедлайн {t['deadline']}" if t["deadline"] else ""
         lines.append(f"- {t['title']} [{t['priority']}{deadline}, {t['assignee']}]")
     return "\n".join(lines)
 
 
-
 # ---------------------------------------------------------------------------
-# File text extraction
-# ---------------------------------------------------------------------------
-
-async def extract_text_from_document(doc: Document, bot) -> str:
-    file = await bot.get_file(doc.file_id)
-    buf = io.BytesIO()
-    await file.download_to_memory(buf)
-    buf.seek(0)
-    raw = buf.read()
-    mime = doc.mime_type or ""
-
-    if mime == "application/pdf" or doc.file_name.endswith(".pdf"):
-        try:
-            import pypdf
-            reader = pypdf.PdfReader(io.BytesIO(raw))
-            text = "\n".join(page.extract_text() or "" for page in reader.pages)
-            return text.strip()
-        except Exception as e:
-            logger.warning("PDF extraction failed: %s", e)
-            return "[Не удалось извлечь текст из PDF]"
-
-    if mime in (
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "application/msword",
-    ) or doc.file_name.endswith((".docx", ".doc")):
-        try:
-            import docx
-            document = docx.Document(io.BytesIO(raw))
-            text = "\n".join(p.text for p in document.paragraphs)
-            return text.strip()
-        except Exception as e:
-            logger.warning("DOCX extraction failed: %s", e)
-            return "[Не удалось извлечь текст из Word-документа]"
-
-    # Fallback: try decode as text
-    try:
-        return raw.decode("utf-8")
-    except Exception:
-        return "[Неподдерживаемый формат файла]"
-
-
-# ---------------------------------------------------------------------------
-# Claude API
+# Claude API  — supports conversation history
 # ---------------------------------------------------------------------------
 claude = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
 
-def ask_claude(system_prompt: str, user_message: str) -> str:
+def ask_claude(system_prompt: str, user_message: str,
+               history: list[dict] | None = None) -> str:
+    messages = list(history) if history else []
+    messages.append({"role": "user", "content": user_message})
     response = claude.messages.create(
         model="claude-sonnet-4-5",
         max_tokens=2048,
         system=system_prompt,
-        messages=[{"role": "user", "content": user_message}],
+        messages=messages,
     )
     return response.content[0].text
+
+
+# ---------------------------------------------------------------------------
+# Morning digest (APScheduler)
+# ---------------------------------------------------------------------------
+async def send_morning_digest(bot: Bot) -> None:
+    if not OWNER_CHAT_ID:
+        logger.warning("OWNER_CHAT_ID not set, skipping morning digest")
+        return
+    try:
+        tasks = notion_get_tasks()
+        today = datetime.now(pytz.timezone("Europe/Rome")).strftime("%d.%m.%Y")
+        prompt = fetch_agent_prompt("paola")
+        digest_request = (
+            f"Сегодня {today}. Составь краткую утреннюю сводку для пользователя: "
+            "поприветствуй, перечисли активные задачи с приоритетами, "
+            "выдели самое важное на сегодня. Будь краткой и бодрой."
+        )
+        today_str = datetime.now(pytz.timezone("Europe/Rome")).strftime("%d.%m.%Y (%A)")
+        task_context = build_notion_context(tasks)
+        system = (
+            prompt
+            + f"\n\nСЕГОДНЯШНЯЯ ДАТА: {today_str}."
+            + f"\n\n{task_context}"
+        )
+        text = ask_claude(system, digest_request)
+        await bot.send_message(chat_id=int(OWNER_CHAT_ID), text=text)
+        logger.info("Morning digest sent to %s", OWNER_CHAT_ID)
+    except Exception as e:
+        logger.error("Morning digest error: %s", e)
 
 
 # ---------------------------------------------------------------------------
@@ -363,8 +351,9 @@ async def cmd_team(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id      = update.effective_user.id
     user_message = update.message.text or ""
-    doc = update.message.document
+    doc          = update.message.document
 
     # Extract file text if present
     file_text = ""
@@ -379,7 +368,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     combined = user_message
     if file_text:
-        combined = f"{user_message}\n\n[Содержимое файла {doc.file_name}]:\n{file_text}" if user_message else f"[Содержимое файла {doc.file_name}]:\n{file_text}"
+        combined = (
+            f"{user_message}\n\n[Содержимое файла {doc.file_name}]:\n{file_text}"
+            if user_message else
+            f"[Содержимое файла {doc.file_name}]:\n{file_text}"
+        )
 
     if not combined.strip():
         await update.message.reply_text("Пожалуйста, напиши вопрос или прикрепи файл.")
@@ -388,9 +381,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     agent = get_active_agent(context)
 
     if agent == "team":
-        await _handle_team(update, context, combined)
+        await _handle_team(update, context, combined, user_id)
     else:
-        await _handle_single(update, context, agent, combined)
+        await _handle_single(update, context, agent, combined, user_id)
 
 
 async def _handle_single(
@@ -398,6 +391,7 @@ async def _handle_single(
     context: ContextTypes.DEFAULT_TYPE,
     agent_key: str,
     message: str,
+    user_id: int,
 ) -> None:
     await update.message.chat.send_action("typing")
     try:
@@ -407,11 +401,10 @@ async def _handle_single(
         await update.message.reply_text(f"Ошибка при загрузке промпта из Notion: {e}")
         return
 
-    # For Paola: detect task commands and execute them directly via Notion API
+    # Paola-specific: show/close/delete tasks via keywords
     if agent_key == "paola":
         msg_lower = message.lower()
 
-        # Show tasks
         if any(kw in msg_lower for kw in ["покажи задачи", "список задач", "мои задачи"]):
             try:
                 tasks = notion_get_tasks()
@@ -420,7 +413,6 @@ async def _handle_single(
             except Exception as e:
                 logger.error("Notion get tasks error: %s", e)
 
-        # Close task
         if any(kw in msg_lower for kw in ["закрой задачу", "закрыть задачу", "выполнена задача"]):
             for kw in ["закрой задачу", "закрыть задачу", "выполнена задача"]:
                 if kw in msg_lower:
@@ -428,16 +420,14 @@ async def _handle_single(
                     if title:
                         try:
                             done = notion_close_task(title)
-                            if done:
-                                await update.message.reply_text(f"✅ Задача закрыта: {title}")
-                            else:
-                                await update.message.reply_text(f"❌ Задача не найдена: {title}")
+                            await update.message.reply_text(
+                                f"✅ Задача закрыта: {title}" if done else f"❌ Задача не найдена: {title}"
+                            )
                             return
                         except Exception as e:
                             logger.error("Notion close task error: %s", e)
                     break
 
-        # Delete task
         if any(kw in msg_lower for kw in ["удали задачу", "удалить задачу"]):
             for kw in ["удали задачу", "удалить задачу"]:
                 if kw in msg_lower:
@@ -445,64 +435,57 @@ async def _handle_single(
                     if title:
                         try:
                             deleted = notion_delete_task(title)
-                            if deleted:
-                                await update.message.reply_text(f"🗑 Задача удалена: {title}")
-                            else:
-                                await update.message.reply_text(f"❌ Задача не найдена: {title}")
+                            await update.message.reply_text(
+                                f"🗑 Задача удалена: {title}" if deleted else f"❌ Задача не найдена: {title}"
+                            )
                             return
                         except Exception as e:
                             logger.error("Notion delete task error: %s", e)
                     break
 
-        # Inject current date + tasks into prompt so Paola is aware
+        # Inject date + tasks silently into system prompt
         today_str = datetime.now().strftime("%d.%m.%Y (%A)")
         prompt = prompt + f"\n\nСЕГОДНЯШНЯЯ ДАТА: {today_str}."
         try:
             tasks = notion_get_tasks()
-            task_context = build_notion_context(tasks)
-            prompt = prompt + f"\n\nТЕКУЩИЕ ДАННЫЕ ИЗ NOTION (реальные, не придумывай):\n{task_context}"
+            prompt = prompt + f"\n\n{build_notion_context(tasks)}"
         except Exception as e:
             logger.warning("Could not load tasks for context: %s", e)
 
-    # For Paola: detect task creation intent via Claude (no rigid keyword matching)
+    # Paola: detect task creation intent via Claude
     if agent_key == "paola":
         try:
-            today = datetime.now().strftime("%Y-%m-%d")
-            weekday = datetime.now().strftime("%A")  # Monday, Tuesday...
+            today   = datetime.now().strftime("%Y-%m-%d")
+            weekday = datetime.now().strftime("%A")
             parse_prompt = (
                 f"Сегодняшняя дата: {today} ({weekday}).\n"
-                "Проанализируй сообщение пользователя. Если он просит создать, добавить, записать или запомнить одну или несколько задач/дел/напоминаний — "
-                "извлеки параметры КАЖДОЙ задачи отдельно и ответь СТРОГО в формате ниже (без лишних слов).\n"
-                "Для каждой задачи — отдельный блок, разделённый строкой '---':\n\n"
+                "Проанализируй сообщение пользователя. Если он просит создать, добавить, "
+                "записать или запомнить одну или несколько задач/дел/напоминаний — "
+                "извлеки параметры КАЖДОЙ задачи отдельно и ответь СТРОГО в формате ниже "
+                "(без лишних слов). Для каждой задачи — отдельный блок через '---':\n\n"
                 "TASK: YES\n"
-                "TITLE: <краткое название задачи>\n"
-                "DEADLINE: <дата в формате YYYY-MM-DD, вычисли точную дату если написано 'завтра'/'в пятницу' и т.д., или пусто если не указана>\n"
+                "TITLE: <название>\n"
+                "DEADLINE: <YYYY-MM-DD или пусто>\n"
                 "PRIORITY: <Срочное|Важное|Обычное>\n"
                 "SECTION: <Саморазвитие|Здоровье|Семья|Нетворкинг|Бизнес>\n"
                 "ASSIGNEE: <Юля|Паола|Карло|Борис|Сандро>\n\n"
-                "Если пользователь НЕ просит создать задачи — ответь только:\n"
-                "TASK: NO\n\n"
-                "Умолчания если не указано: PRIORITY=Обычное, SECTION=Бизнес, ASSIGNEE=Юля."
+                "Если НЕ просит создать задачи:\nTASK: NO\n\n"
+                "Умолчания: PRIORITY=Обычное, SECTION=Бизнес, ASSIGNEE=Юля."
             )
             parsed = ask_claude(parse_prompt, message)
-
-            # Split into task blocks by '---'
             blocks = [b.strip() for b in parsed.strip().split("---") if b.strip()]
             created_tasks = []
 
             for block in blocks:
-                lines = {l.split(":")[0].strip(): ":".join(l.split(":")[1:]).strip()
-                         for l in block.splitlines() if ":" in l}
-
-                if lines.get("TASK", "NO").strip().upper() != "YES":
+                kv = {l.split(":")[0].strip(): ":".join(l.split(":")[1:]).strip()
+                      for l in block.splitlines() if ":" in l}
+                if kv.get("TASK", "NO").strip().upper() != "YES":
                     continue
-
-                title = lines.get("TITLE", "").strip()
-                deadline = lines.get("DEADLINE", "").strip() or None
-                priority = lines.get("PRIORITY", "Обычное").strip()
-                section = lines.get("SECTION", "Бизнес").strip()
-                assignee = lines.get("ASSIGNEE", "Юля").strip()
-
+                title    = kv.get("TITLE", "").strip()
+                deadline = kv.get("DEADLINE", "").strip() or None
+                priority = kv.get("PRIORITY", "Обычное").strip()
+                section  = kv.get("SECTION", "Бизнес").strip()
+                assignee = kv.get("ASSIGNEE", "Юля").strip()
                 if title:
                     notion_create_task(title, deadline, priority, section, assignee)
                     deadline_str = f", до {deadline}" if deadline else ""
@@ -510,14 +493,16 @@ async def _handle_single(
                     created_tasks.append(f"• *{title}*{deadline_str} [{priority}, {assignee}]")
 
             if created_tasks:
+                # Send Claude's friendly reply first
                 try:
-                    reply = ask_claude(prompt, message)
+                    reply = ask_claude(prompt, message, get_history(user_id))
+                    add_to_history(user_id, "user", message)
+                    add_to_history(user_id, "assistant", reply)
                     await update.message.reply_text(reply)
                 except Exception:
                     pass
-                tasks_text = "\n".join(created_tasks)
                 await update.message.reply_text(
-                    f"✅ Добавлено в Notion ({len(created_tasks)}):\n{tasks_text}",
+                    f"✅ Добавлено в Notion ({len(created_tasks)}):\n" + "\n".join(created_tasks),
                     parse_mode="Markdown"
                 )
                 return
@@ -525,13 +510,17 @@ async def _handle_single(
         except Exception as e:
             logger.error("Task intent detection error: %s", e)
 
+    # Regular Claude reply with history
     try:
-        reply = ask_claude(prompt, message)
+        history = get_history(user_id)
+        reply   = ask_claude(prompt, message, history)
     except Exception as e:
         logger.error("Claude API error: %s", e)
         await update.message.reply_text(f"Ошибка Claude API: {e}")
         return
 
+    add_to_history(user_id, "user", message)
+    add_to_history(user_id, "assistant", reply)
     await update.message.reply_text(reply)
 
 
@@ -539,8 +528,10 @@ async def _handle_team(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
     message: str,
+    user_id: int,
 ) -> None:
     await update.message.reply_text("🏛 Совет директоров начинает работу...\n")
+    history = get_history(user_id)
 
     for agent_key, agent_name in AGENTS.items():
         await update.message.chat.send_action("typing")
@@ -550,15 +541,55 @@ async def _handle_team(
             logger.error("Notion fetch error for %s: %s", agent_key, e)
             await update.message.reply_text(f"*{agent_name}*: Ошибка загрузки промпта — {e}", parse_mode="Markdown")
             continue
-
         try:
-            reply = ask_claude(prompt, message)
+            reply = ask_claude(prompt, message, history)
         except Exception as e:
             logger.error("Claude API error for %s: %s", agent_key, e)
             await update.message.reply_text(f"*{agent_name}*: Ошибка Claude API — {e}", parse_mode="Markdown")
             continue
-
         await update.message.reply_text(f"*{agent_name}*:\n{reply}", parse_mode="Markdown")
+
+    # Save last exchange to history
+    add_to_history(user_id, "user", message)
+
+
+# ---------------------------------------------------------------------------
+# File text extraction
+# ---------------------------------------------------------------------------
+
+async def extract_text_from_document(doc: Document, bot) -> str:
+    file = await bot.get_file(doc.file_id)
+    buf  = io.BytesIO()
+    await file.download_to_memory(buf)
+    buf.seek(0)
+    raw  = buf.read()
+    mime = doc.mime_type or ""
+
+    if mime == "application/pdf" or doc.file_name.endswith(".pdf"):
+        try:
+            import pypdf
+            reader = pypdf.PdfReader(io.BytesIO(raw))
+            return "\n".join(page.extract_text() or "" for page in reader.pages).strip()
+        except Exception as e:
+            logger.warning("PDF extraction failed: %s", e)
+            return "[Не удалось извлечь текст из PDF]"
+
+    if mime in (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/msword",
+    ) or doc.file_name.endswith((".docx", ".doc")):
+        try:
+            import docx
+            document = docx.Document(io.BytesIO(raw))
+            return "\n".join(p.text for p in document.paragraphs).strip()
+        except Exception as e:
+            logger.warning("DOCX extraction failed: %s", e)
+            return "[Не удалось извлечь текст из Word-документа]"
+
+    try:
+        return raw.decode("utf-8")
+    except Exception:
+        return "[Неподдерживаемый формат файла]"
 
 
 # ---------------------------------------------------------------------------
@@ -568,16 +599,26 @@ async def _handle_team(
 def main() -> None:
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
-    app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("paola", cmd_paola))
-    app.add_handler(CommandHandler("carlo", cmd_carlo))
-    app.add_handler(CommandHandler("boris", cmd_boris))
+    app.add_handler(CommandHandler("start",  cmd_start))
+    app.add_handler(CommandHandler("paola",  cmd_paola))
+    app.add_handler(CommandHandler("carlo",  cmd_carlo))
+    app.add_handler(CommandHandler("boris",  cmd_boris))
     app.add_handler(CommandHandler("sandro", cmd_sandro))
-    app.add_handler(CommandHandler("team", cmd_team))
-
-    # Handle text messages and documents
+    app.add_handler(CommandHandler("team",   cmd_team))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_message))
+
+    # Morning digest scheduler — 09:00 Europe/Rome every day
+    scheduler = AsyncIOScheduler(timezone=pytz.timezone("Europe/Rome"))
+    scheduler.add_job(
+        send_morning_digest,
+        trigger=CronTrigger(hour=9, minute=0, timezone=pytz.timezone("Europe/Rome")),
+        args=[app.bot],
+        id="morning_digest",
+        replace_existing=True,
+    )
+    scheduler.start()
+    logger.info("Scheduler started — morning digest at 09:00 Europe/Rome")
 
     logger.info("Bot started")
     app.run_polling(drop_pending_updates=True)
