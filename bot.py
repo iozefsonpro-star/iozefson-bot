@@ -269,6 +269,53 @@ def build_notion_context(tasks: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def notion_find_task(title: str) -> str | None:
+    """Find task page_id by title. Returns page_id or None."""
+    results = notion.databases.query(**{
+        "database_id": NOTION_TODOLIST_DB_ID,
+        "filter": {"property": "Задача", "rich_text": {"contains": title}},
+    }).get("results", [])
+    return results[0]["id"] if results else None
+
+
+def notion_update_field(title: str, field: str, value: str) -> bool:
+    """
+    Update any field of a task by title.
+    field: "Дедлайн" | "Приоритет" | "Статус" | "Раздел" | "Кто делает"
+    value: string value appropriate for the field type.
+    Returns True if task found and updated.
+    """
+    page_id = notion_find_task(title)
+    if not page_id:
+        return False
+
+    FIELD_TYPES = {
+        "Дедлайн":    "date",
+        "Приоритет":  "select",
+        "Статус":     "select",
+        "Раздел":     "select",
+        "Кто делает": "multi_select",
+    }
+    field_type = FIELD_TYPES.get(field)
+    if not field_type:
+        logger.warning("Unknown field: %s", field)
+        return False
+
+    if field_type == "date":
+        props = {"Дедлайн": {"date": {"start": value}}}
+    elif field_type == "select":
+        props = {field: {"select": {"name": value}}}
+    elif field_type == "multi_select":
+        # value can be comma-separated: "Юля, Паола"
+        names = [v.strip() for v in value.split(",") if v.strip()]
+        props = {field: {"multi_select": [{"name": n} for n in names]}}
+    else:
+        return False
+
+    notion.pages.update(page_id=page_id, properties=props)
+    return True
+
+
 def notion_update_deadline(title: str, new_date: str) -> bool:
     """Update task deadline by title. new_date in YYYY-MM-DD format. Returns True if found."""
     results = notion.databases.query(**{
@@ -892,6 +939,12 @@ async def _handle_single(
             "CLOSE: <название> — закрыть задачу\n"
             "DELETE: <название> — удалить задачу\n"
             "RESCHEDULE: <название> | <YYYY-MM-DD> — перенести дедлайн\n"
+            "UPDATE_FIELD: <название> | <поле> | <значение> — изменить поле задачи.\n"
+            "  Поле = Приоритет | Статус | Раздел | Кто делает\n"
+            "  Приоритет: Срочное | Важное | Обычное\n"
+            "  Статус: To do | In progress | Done\n"
+            "  Раздел: Саморазвитие | Здоровье | Семья | Нетворкинг | Бизнес\n"
+            "  Кто делает: Юля, Паола, Карло, Борис, Сандро (через запятую если несколько)\n"
             "CREATE_TASK — создать задачу\n"
             "OTHER — всё остальное"
         )
@@ -952,6 +1005,21 @@ async def _handle_single(
                     f"✅ Перенесла на {new_date}: {title}" if done
                     else f"❌ Не нашла: {title}"
                 )
+                return
+
+        if intent.startswith("UPDATE_FIELD:"):
+            parts = intent[13:].split("|")
+            if len(parts) == 3:
+                title = parts[0].strip()
+                field = parts[1].strip()
+                value = parts[2].strip()
+                done  = notion_update_field(title, field, value)
+                if done:
+                    await update.message.reply_text(
+                        f"✅ Обновила «{field}» → {value}: {title}"
+                    )
+                else:
+                    await update.message.reply_text(f"❌ Не нашла задачу: {title}")
                 return
 
         # Inject date + tasks + calendar silently into system prompt
