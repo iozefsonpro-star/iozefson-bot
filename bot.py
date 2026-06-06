@@ -175,14 +175,14 @@ def notion_create_task(title: str, deadline: str | None, priority: str, section:
 
 def notion_get_tasks() -> list[dict]:
     """Get active tasks (To Do + In Progress) from Notion."""
-    response = notion.databases.query(
-        database_id=NOTION_TODOLIST_DB_ID,
-        filter={"or": [
+    response = notion.databases.query(**{
+        "database_id": NOTION_TODOLIST_DB_ID,
+        "filter": {"or": [
             {"property": "Статус", "select": {"equals": "To Do"}},
             {"property": "Статус", "select": {"equals": "In Progress"}},
         ]},
-        sorts=[{"property": "Приоритет", "direction": "ascending"}],
-    )
+        "sorts": [{"property": "Приоритет", "direction": "ascending"}],
+    })
     tasks = []
     for page in response.get("results", []):
         props = page.get("properties", {})
@@ -198,10 +198,10 @@ def notion_get_tasks() -> list[dict]:
 
 def notion_close_task(title: str) -> bool:
     """Set task status to Done by title."""
-    results = notion.databases.query(
-        database_id=NOTION_TODOLIST_DB_ID,
-        filter={"property": "Name", "rich_text": {"contains": title}},
-    ).get("results", [])
+    results = notion.databases.query(**{
+        "database_id": NOTION_TODOLIST_DB_ID,
+        "filter": {"property": "Задача", "rich_text": {"contains": title}},
+    }).get("results", [])
     if not results:
         return False
     notion.pages.update(page_id=results[0]["id"],
@@ -211,10 +211,10 @@ def notion_close_task(title: str) -> bool:
 
 def notion_delete_task(title: str) -> bool:
     """Archive (delete) task by title."""
-    results = notion.databases.query(
-        database_id=NOTION_TODOLIST_DB_ID,
-        filter={"property": "Name", "rich_text": {"contains": title}},
-    ).get("results", [])
+    results = notion.databases.query(**{
+        "database_id": NOTION_TODOLIST_DB_ID,
+        "filter": {"property": "Задача", "rich_text": {"contains": title}},
+    }).get("results", [])
     if not results:
         return False
     notion.pages.update(page_id=results[0]["id"], archived=True)
