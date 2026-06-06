@@ -41,7 +41,15 @@ if not creds or not creds.valid:
         print("Token refreshed.")
     else:
         flow = InstalledAppFlow.from_client_secrets_file(SECRET_FILE, SCOPES)
-        creds = flow.run_local_server(port=0)
+        # Headless mode — no browser needed on server
+        auth_url, _ = flow.authorization_url(prompt="consent")
+        print("\n🔗 Open this URL in your browser:\n")
+        print(auth_url)
+        print("\nAfter login Google will redirect to localhost (page won't load).")
+        print("Copy the FULL URL from the address bar and paste it here:")
+        redirect_response = input("\nPaste the full redirect URL: ").strip()
+        flow.fetch_token(authorization_response=redirect_response)
+        creds = flow.credentials
         print("Authorization complete.")
 
 with open(TOKEN_FILE, "w") as f:
