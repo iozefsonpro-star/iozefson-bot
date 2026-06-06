@@ -161,7 +161,7 @@ def notion_create_task(title: str, deadline: str | None, priority: str, section:
     properties = {
         "Задача": {"title": [{"text": {"content": title}}]},
         "Приоритет": {"select": {"name": priority}},
-        "Статус": {"select": {"name": "To Do"}},
+        "Статус": {"select": {"name": "To do"}},
         "Раздел": {"select": {"name": section}},
         "Кто делает": {"multi_select": [{"name": assignee}]},
     }
@@ -178,8 +178,8 @@ def notion_get_tasks() -> list[dict]:
     response = notion.databases.query(**{
         "database_id": NOTION_TODOLIST_DB_ID,
         "filter": {"or": [
-            {"property": "Статус", "select": {"equals": "To Do"}},
-            {"property": "Статус", "select": {"equals": "In Progress"}},
+            {"property": "Статус", "select": {"equals": "To do"}},
+            {"property": "Статус", "select": {"equals": "In progress"}},
         ]},
         "sorts": [{"property": "Приоритет", "direction": "ascending"}],
     })
