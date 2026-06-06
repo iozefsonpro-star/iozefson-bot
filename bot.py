@@ -50,11 +50,7 @@ NOTION_TODOLIST_DB_ID = os.environ.get("NOTION_TODOLIST_DB_ID")
 OWNER_CHAT_ID         = os.environ.get("OWNER_CHAT_ID")
 
 # Google Calendar — credentials stored as env vars (never in git)
-GOOGLE_TOKEN_JSON      = os.environ.get("GOOGLE_TOKEN_JSON")       # content of token.json
-GOOGLE_CALENDAR_IDS    = [
-    "iozefson.pro@gmail.com",       # бизнес-календарь
-    "yulia.iozefson.a@gmail.com",   # личный календарь
-]
+GOOGLE_TOKEN_JSON = os.environ.get("GOOGLE_TOKEN_JSON")  # content of token.json
 
 _missing = [k for k, v in {
     "TELEGRAM_TOKEN": TELEGRAM_TOKEN,
@@ -297,6 +293,23 @@ def ask_claude(system_prompt: str, user_message: str,
 # ---------------------------------------------------------------------------
 GCAL_SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
 
+# Single source account — all calendars visible through it
+GCAL_ACCOUNT = "yulia.iozefson.a@gmail.com"
+
+# Calendar name → (emoji, label) mapping; order defines display order
+GCAL_CATEGORIES = [
+    ("Business",           "💼", "Бизнес"),
+    ("Salute",             "🏥", "Здоровье"),
+    ("Networking",         "🤝", "Нетворкинг"),
+    ("Beauty",             "💅", "Бьюти"),
+    ("Viaggi",             "✈️", "Поездки"),
+    ("Астро-календарь",    "🌙", "Астро-календарь"),
+    ("Mental efficiency",  "🧠", "Mental efficiency"),
+]
+GCAL_OTHER_EMOJI  = "📌"
+GCAL_OTHER_LABEL  = "Остальное"
+GCAL_SKIP = {"Tasks"}  # never show
+
 
 def _get_gcal_credentials() -> Credentials | None:
     """Load Google OAuth credentials from GOOGLE_TOKEN_JSON env var."""
@@ -315,26 +328,32 @@ def _get_gcal_credentials() -> Credentials | None:
         return None
 
 
-def get_calendar_events(days: int = 7) -> list[dict]:
+def get_calendar_events(days: int = 7) -> dict[str, list[dict]]:
     """
-    Return events for the next `days` days from all configured calendars.
-    Each item: {date, time, title, calendar}
-    Default: 7 days so Paola always has weekly context.
+    Return events for the next `days` days grouped by calendar name.
+    Result: {"Business": [{date, time, title}, ...], ...}
     """
     creds = _get_gcal_credentials()
     if not creds:
-        return []
+        return {}
 
     try:
-        service = gcal_build("calendar", "v3", credentials=creds, cache_discovery=False)
-        rome_tz = pytz.timezone("Europe/Rome")
-        now = datetime.now(rome_tz)
-        time_min = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
         from datetime import timedelta
+        service  = gcal_build("calendar", "v3", credentials=creds, cache_discovery=False)
+        rome_tz  = pytz.timezone("Europe/Rome")
+        now      = datetime.now(rome_tz)
+        time_min = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
         time_max = (now + timedelta(days=days)).replace(hour=23, minute=59, second=59).isoformat()
 
-        events = []
-        for cal_id in GOOGLE_CALENDAR_IDS:
+        # Fetch all calendars for this account
+        cal_list = service.calendarList().list().execute().get("items", [])
+        grouped: dict[str, list[dict]] = {}
+
+        for cal in cal_list:
+            cal_name = cal.get("summary", "")
+            if cal_name in GCAL_SKIP:
+                continue
+            cal_id = cal["id"]
             try:
                 result = service.events().list(
                     calendarId=cal_id,
@@ -342,45 +361,72 @@ def get_calendar_events(days: int = 7) -> list[dict]:
                     timeMax=time_max,
                     singleEvents=True,
                     orderBy="startTime",
-                    maxResults=20,
+                    maxResults=15,
                 ).execute()
-                for ev in result.get("items", []):
+                items = result.get("items", [])
+                if not items:
+                    continue
+                grouped[cal_name] = []
+                for ev in items:
                     start = ev["start"].get("dateTime", ev["start"].get("date", ""))
                     if "T" in start:
-                        dt = datetime.fromisoformat(start).astimezone(rome_tz)
+                        dt       = datetime.fromisoformat(start).astimezone(rome_tz)
                         date_str = dt.strftime("%d.%m (%a)")
                         time_str = dt.strftime("%H:%M")
                         sort_key = dt.isoformat()
                     else:
-                        date_str = start  # YYYY-MM-DD
+                        date_str = start
                         time_str = "весь день"
                         sort_key = start
-                    events.append({
-                        "date":     date_str,
-                        "time":     time_str,
-                        "title":    ev.get("summary", "(без названия)"),
-                        "calendar": cal_id,
-                        "_sort":    sort_key,
+                    grouped[cal_name].append({
+                        "date":  date_str,
+                        "time":  time_str,
+                        "title": ev.get("summary", "(без названия)"),
+                        "_sort": sort_key,
                     })
+                grouped[cal_name].sort(key=lambda x: x["_sort"])
             except Exception as e:
-                logger.warning("Calendar %s error: %s", cal_id, e)
+                logger.warning("Calendar '%s' error: %s", cal_name, e)
 
-        events.sort(key=lambda x: x["_sort"])
-        logger.info("Loaded %d calendar events", len(events))
-        return events
+        total = sum(len(v) for v in grouped.values())
+        logger.info("Loaded %d calendar events across %d calendars", total, len(grouped))
+        return grouped
     except Exception as e:
         logger.error("Google Calendar error: %s", e)
-        return []
+        return {}
 
 
-def format_calendar_events(events: list[dict]) -> str:
-    """Format events for injection into system prompt (silent context)."""
-    if not events:
+def format_calendar_events(grouped: dict[str, list[dict]]) -> str:
+    """
+    Format grouped events for injection into Paola's system prompt.
+    Only shows calendars that have events. Returns empty string if no events at all.
+    """
+    if not grouped:
         return ""
-    lines = ["События в календаре на ближайшие 7 дней:"]
-    for ev in events:
-        cal_label = "💼" if "pro" in ev["calendar"] else "👤"
-        lines.append(f"  {cal_label} {ev['date']} {ev['time']} — {ev['title']}")
+
+    lines = ["📅 События на ближайшие 7 дней:"]
+    shown_names = set()
+
+    # Show in defined order first
+    for cal_name, emoji, label in GCAL_CATEGORIES:
+        if cal_name in grouped:
+            lines.append(f"\n{emoji} {label}:")
+            for ev in grouped[cal_name]:
+                lines.append(f"  - {ev['date']} {ev['time']} — {ev['title']}")
+            shown_names.add(cal_name)
+
+    # Remaining calendars → "Остальное"
+    other_events = []
+    for cal_name, evs in grouped.items():
+        if cal_name not in shown_names:
+            for ev in evs:
+                other_events.append((ev["_sort"], cal_name, ev))
+    if other_events:
+        other_events.sort(key=lambda x: x[0])
+        lines.append(f"\n{GCAL_OTHER_EMOJI} {GCAL_OTHER_LABEL}:")
+        for _, cal_name, ev in other_events:
+            lines.append(f"  - {ev['date']} {ev['time']} — {ev['title']} [{cal_name}]")
+
     return "\n".join(lines)
 
 
@@ -410,7 +456,7 @@ async def _send_digest(bot: Bot, digest_type: str) -> None:
                 "предложи что стоит сделать завтра. Будь тёплой и поддерживающей."
             )
 
-        events = get_calendar_events(days=1)
+        events = get_calendar_events(days=7)
         cal_context = format_calendar_events(events)
         system = (
             prompt
@@ -592,7 +638,7 @@ async def _handle_single(
         except Exception as e:
             logger.warning("Could not load tasks for context: %s", e)
         try:
-            events = get_calendar_events(days=1)
+            events = get_calendar_events(days=7)
             cal_context = format_calendar_events(events)
             if cal_context:
                 prompt = prompt + f"\n\n{cal_context}"
