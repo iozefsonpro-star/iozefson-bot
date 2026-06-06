@@ -1,35 +1,45 @@
 """
-Run this script ONCE locally on your Mac to authorize Google Calendar access.
-It will open a browser, ask you to log in with Google, and save token.json.
+Run this script ONCE in Railway Console to authorize Google Calendar.
+Requires GOOGLE_CLIENT_SECRET_JSON environment variable to be set in Railway.
 
 Steps:
-  1. Place client_secret_*.json in the same folder as this script
-  2. Run: python auth_google.py
-  3. Log in with iozefson.pro@gmail.com in the browser
-  4. Copy the content of token.json
-  5. Add it to Railway Variables as GOOGLE_TOKEN_JSON (paste the full JSON string)
+  1. Set GOOGLE_CLIENT_SECRET_JSON in Railway Variables
+  2. Run in Railway Console: python3 auth_google.py
+  3. Open the URL shown, log in with Google, allow access
+  4. Google shows a CODE — paste it back in Console
+  5. Copy the printed token JSON
+  6. Add it to Railway Variables as GOOGLE_TOKEN_JSON
 """
 
 import json
 import os
+import tempfile
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 
 SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
-TOKEN_FILE  = "token.json"
-SECRET_FILE = next(
-    (f for f in os.listdir(".") if f.startswith("client_secret") and f.endswith(".json")),
-    None,
-)
+TOKEN_FILE = "token.json"
 
-if not SECRET_FILE:
-    raise FileNotFoundError(
-        "client_secret_*.json not found in current directory.\n"
-        "Download it from Google Cloud Console → APIs & Services → Credentials."
+# Read client secret from env var or file
+client_secret_json = os.environ.get("GOOGLE_CLIENT_SECRET_JSON")
+if client_secret_json:
+    # Write to temp file for the flow
+    SECRET_FILE = tempfile.mktemp(suffix=".json")
+    with open(SECRET_FILE, "w") as f:
+        f.write(client_secret_json)
+    print("Using credentials from GOOGLE_CLIENT_SECRET_JSON env var.")
+else:
+    SECRET_FILE = next(
+        (f for f in os.listdir(".") if f.startswith("client_secret") and f.endswith(".json")),
+        None,
     )
-
-print(f"Using credentials file: {SECRET_FILE}")
+    if not SECRET_FILE:
+        raise FileNotFoundError(
+            "No credentials found.\n"
+            "Set GOOGLE_CLIENT_SECRET_JSON in Railway Variables."
+        )
+    print(f"Using credentials file: {SECRET_FILE}")
 
 creds = None
 if os.path.exists(TOKEN_FILE):
