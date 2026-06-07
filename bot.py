@@ -235,7 +235,7 @@ def format_tasks_list(tasks: list[dict]) -> str:
     if not tasks:
         return "✅ Активных задач нет."
     icon_map = {"🔥 Срочное": "🔴", "❗ Важное": "🟡", "✅ Обычное": "🟢", "🔜 Когда-нибудь": "⚪"}
-    lines = ["📋 Активные задачи:\n"]
+    lines = [f"📋 Активные задачи (всего: {len(tasks)}):\n"]
     for t in tasks:
         icon     = icon_map.get(t["priority"], "⚪")
         deadline = f" — до {t['deadline']}" if t["deadline"] else ""
@@ -465,10 +465,14 @@ async def _send_digest(bot: Bot, digest_type: str) -> None:
                 + f"\n\n{task_ctx}"
                 + (f"\n\n{cal_text}" if cal_text else "")
             )
+            total  = len(tasks)
+            urgent = sum(1 for t in tasks if "Срочное" in t.get("priority", ""))
             request = (
                 f"Составь утренний брифинг на {now_str}. "
-                "Поприветствуй, выдели самое важное на сегодня из задач и календаря. "
-                "Коротко и бодро. Plain text, только эмодзи — никакого Markdown."
+                f"Всего активных задач: {total}, из них срочных: {urgent}. "
+                "Поприветствуй коротко, напомни сколько задач в работе, "
+                "выдели срочные и события дня из календаря. "
+                "Бодро и по делу. Plain text, только эмодзи — никакого Markdown."
             )
             text = clean_markdown(ask_claude(system, request))
 
