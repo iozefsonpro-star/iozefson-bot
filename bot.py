@@ -462,8 +462,8 @@ async def _send_digest(bot: Bot, digest_type: str) -> None:
             system = (
                 SYSTEM_PROMPT
                 + f"\n\nСЕГОДНЯ: {now_str}"
-                + f"\n\n{task_ctx}"
                 + (f"\n\n{cal_text}" if cal_text else "")
+                + f"\n\n{task_ctx}"
             )
             total  = len(tasks)
             urgent = sum(1 for t in tasks if "Срочное" in t.get("priority", ""))
