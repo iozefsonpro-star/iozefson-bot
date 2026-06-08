@@ -71,7 +71,13 @@ SYSTEM_PROMPT = (
     "У тебя есть прямой доступ к Notion (задачи) и Google Calendar Юлии. "
     "Когда задача уже создана ботом — просто подтверди коротко. "
     "Никогда не говори 'у меня нет доступа к Notion' — это неправда. "
-    "Отвечай только plain text и эмодзи, без Markdown звёздочек."
+    "Отвечай только plain text и эмодзи, без Markdown звёздочек.\n\n"
+    "ПРАВИЛО ВСТРЕЧ: при любом упоминании встреч из календаря — "
+    "всегда ставь эмодзи по типу календаря ПЕРЕД временем. "
+    "Формат строго: {эмодзи} {время} — {название}. "
+    "Никогда не заменяй эмодзи на тире или точку. "
+    "💼=Business/Generali, 👥=Networking, 🏥=Salute, 💅=Beauty, "
+    "🧠=Mental efficiency, ✈️=Viaggi, 🌙=Астро-календарь, 🏠=Vita/Work Vin, 🎂=Birthday, 📌=остальное."
 )
 
 # Pending overdue tasks from evening digest
@@ -462,17 +468,26 @@ async def _send_digest(bot: Bot, digest_type: str) -> None:
             system = (
                 SYSTEM_PROMPT
                 + f"\n\nСЕГОДНЯ: {now_str}"
-                + (f"\n\n{cal_text}" if cal_text else "")
                 + f"\n\n{task_ctx}"
+                + (f"\n\n{cal_text}" if cal_text else "")
             )
+            today_iso = datetime.now(ROME_TZ).strftime("%Y-%m-%d")
+            tasks_today = [t for t in tasks if t.get("deadline", "") == today_iso]
+            tasks_today.sort(key=lambda t: ["🔥 Срочное","❗ Важное","✅ Обычное","🔜 Когда-нибудь"].index(t.get("priority","✅ Обычное")) if t.get("priority") in ["🔥 Срочное","❗ Важное","✅ Обычное","🔜 Когда-нибудь"] else 3)
             total  = len(tasks)
-            urgent = sum(1 for t in tasks if "Срочное" in t.get("priority", ""))
+            urgent = sum(1 for t in tasks_today if "Срочное" in t.get("priority", ""))
             request = (
                 f"Составь утренний брифинг на {now_str}. "
-                f"Всего активных задач: {total}, из них срочных: {urgent}. "
-                "Поприветствуй коротко, напомни сколько задач в работе, "
-                "выдели срочные и события дня из календаря. "
-                "Бодро и по делу. Plain text, только эмодзи — никакого Markdown."
+                f"Всего активных задач в системе: {total}. "
+                "Структура строго такая:\n"
+                "1. Приветствие + дата (1 строка)\n"
+                "2. События дня — скопируй ДОСЛОВНО из календаря ниже, включая эмодзи и время. Только сегодняшний день.\n"
+                f"3. 📋 Задачи на сегодня ({len(tasks_today)}):\n"
+                "   — отсортированы по приоритету: 🔴 срочные, 🟡 важные, 🟢 обычные\n"
+                "   — показывай только задачи с дедлайном сегодня\n"
+                "   — если задач на сегодня нет — напиши '✅ Задач с дедлайном сегодня нет'\n"
+                "4. Одна строка итога — главное на день.\n"
+                "Plain text, никакого Markdown, никаких звёздочек."
             )
             text = clean_markdown(ask_claude(system, request))
 
@@ -519,6 +534,66 @@ async def _send_digest(bot: Bot, digest_type: str) -> None:
 
     except Exception as e:
         logger.error("%s digest error: %s", digest_type, e)
+
+
+async def send_weekly_digest(bot: Bot) -> None:
+    if not OWNER_CHAT_ID:
+        return
+    try:
+        from datetime import timedelta, date as date_cls
+        now_str  = _weekday_ru(datetime.now(ROME_TZ).strftime("%d.%m.%Y (%A)"))
+        today    = datetime.now(ROME_TZ).date()
+        next_mon = today + timedelta(days=(7 - today.weekday()))
+        next_sun = next_mon + timedelta(days=6)
+
+        done_week = notion_get_done_today()  # TODO: расширить на неделю когда будет поле
+        overdue   = notion_get_overdue()
+        events    = get_calendar_events(days=14)
+
+        # Встречи следующей недели
+        next_week_events = []
+        cal_by_date = events.get("by_date", {})
+        for day_key in sorted(cal_by_date.keys()):
+            try:
+                d = date_cls.fromisoformat(day_key)
+                if next_mon <= d <= next_sun:
+                    for ev in cal_by_date[day_key]:
+                        weekday = _weekday_ru(d.strftime("%A"))
+                        next_week_events.append(
+                            f"{ev['emoji']} {weekday} {d.strftime('%d.%m')} {ev['time']} — {ev['title']}"
+                        )
+            except Exception:
+                pass
+
+        parts = [f"📊 Недельная сводка — {now_str}\n"]
+
+        if overdue:
+            parts.append(f"⚠️ Просрочено ({len(overdue)}):")
+            for t in overdue:
+                dl = f" (до {t['deadline']})" if t.get("deadline") else ""
+                parts.append(f"  🔴 {t['title']}{dl}")
+            parts.append("")
+
+        if next_week_events:
+            parts.append(f"📅 Встречи на следующей неделе ({next_mon.strftime('%d.%m')}–{next_sun.strftime('%d.%m')}):")
+            for ev in next_week_events:
+                parts.append(f"  {ev}")
+            parts.append("")
+
+        closing = clean_markdown(ask_claude(
+            SYSTEM_PROMPT,
+            f"Сегодня пятница {now_str}. Добавь 2 строки — короткий итог недели и пожелание выходных. Plain text.",
+        ))
+        parts.append(closing)
+
+        await bot.send_message(chat_id=int(OWNER_CHAT_ID), text="\n".join(parts))
+        logger.info("Weekly digest sent")
+
+    except Exception as e:
+        logger.error("Weekly digest error: %s", e)
+
+
+
 
 
 async def send_morning_digest(bot: Bot) -> None:
@@ -799,8 +874,10 @@ async def post_init(app: Application) -> None:
                       args=[app.bot], id="morning", replace_existing=True)
     scheduler.add_job(send_evening_digest, CronTrigger(hour=21, minute=0, timezone=ROME_TZ),
                       args=[app.bot], id="evening", replace_existing=True)
+    scheduler.add_job(send_weekly_digest, CronTrigger(day_of_week="fri", hour=21, minute=5, timezone=ROME_TZ),
+                      args=[app.bot], id="weekly", replace_existing=True)
     scheduler.start()
-    logger.info("Scheduler started: 08:00 / 21:00 Europe/Rome")
+    logger.info("Scheduler started: 08:00 / 21:00 / пятница 21:05 Europe/Rome")
 
 
 def main() -> None:
