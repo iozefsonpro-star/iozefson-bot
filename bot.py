@@ -825,11 +825,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 context.user_data.pop("pending_overdue", None)
             return
 
+    # Keyword shortcut — не полагаемся на Claude для однозначных запросов
+    _digest_kw = ["сводку", "сводка", "дайджест", "что сегодня", "покажи день",
+                  "план на день", "что у меня сегодня", "что у меня на сегодня"]
+    if any(kw in msg_lower for kw in _digest_kw) and not context.user_data.get("pending_overdue"):
+        try:
+            await update.message.reply_text(build_intraday_digest())
+        except Exception as e:
+            logger.error("Intraday digest error: %s", e)
+            await update.message.reply_text(f"Ошибка: {e}")
+        return
+
     INTENT_PROMPT = (
         f"Сегодня {today_iso}. Сообщение: «{message}»\n\n"
         "Определи намерение. Ответь ТОЛЬКО одним из кодов:\n"
-        "SHOW_DIGEST — показать текущую сводку (встречи + задачи)\n"
-        "SHOW_ALL — показать все активные задачи\n"
+        "SHOW_DIGEST — сводка на день: встречи + задачи + прогресс. "
+        "Примеры: 'сводку', 'что сегодня', 'покажи день', 'как день'\n"
+        "SHOW_ALL — показать список всех активных задач (без встреч). "
+        "Примеры: 'покажи все задачи', 'список задач'\n"
         "SHOW_OVERDUE — показать просроченные задачи\n"
         "CLOSE: <название> — закрыть задачу\n"
         "RESCHEDULE: <название> | <YYYY-MM-DD> — перенести дедлайн\n"
