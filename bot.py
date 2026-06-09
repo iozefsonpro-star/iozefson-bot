@@ -1,7 +1,6 @@
 import os
 import io
 import logging
-import time
 from datetime import datetime
 
 try:
@@ -41,7 +40,7 @@ logger = logging.getLogger(__name__)
 TELEGRAM_TOKEN        = os.environ.get("TELEGRAM_TOKEN")
 ANTHROPIC_API_KEY     = os.environ.get("ANTHROPIC_API_KEY")
 NOTION_TOKEN          = os.environ.get("NOTION_TOKEN")
-NOTION_TODOLIST_DB_ID = os.environ.get("NOTION_TODOLIST_DB_ID")  # ID базы Задачи
+NOTION_TODOLIST_DB_ID = os.environ.get("NOTION_TODOLIST_DB_ID")
 OWNER_CHAT_ID         = os.environ.get("OWNER_CHAT_ID")
 GOOGLE_TOKEN_JSON     = os.environ.get("GOOGLE_TOKEN_JSON")
 
@@ -57,12 +56,12 @@ if _missing:
         f"Missing required environment variables: {', '.join(_missing)}"
     )
 
-MODEL         = "claude-haiku-4-5-20251001"   # быстрый для дайджестов
-MODEL_SMART   = "claude-sonnet-4-6"           # для анализа намерений
-ROME_TZ       = pytz.timezone("Europe/Rome")
+MODEL       = "claude-haiku-4-5-20251001"
+MODEL_SMART = "claude-sonnet-4-6"
+ROME_TZ     = pytz.timezone("Europe/Rome")
 
 # ---------------------------------------------------------------------------
-# System prompt — единственный "агент" (Паола)
+# System prompt
 # ---------------------------------------------------------------------------
 SYSTEM_PROMPT = (
     "Ты Паола — персональный ассистент Юлии Йозефсон. "
@@ -77,10 +76,9 @@ SYSTEM_PROMPT = (
     "Формат строго: {эмодзи} {время} — {название}. "
     "Никогда не заменяй эмодзи на тире или точку. "
     "💼=Business/Generali, 👥=Networking, 🏥=Salute, 💅=Beauty, "
-    "🧠=Mental efficiency, ✈️=Viaggi, 🌙=Астро-календарь, 🏠=Vita/Work Vin, 🎂=Birthday, 📌=остальное."
+    "🧠=Mental efficiency, ✈️=Viaggi, 🏠=Vita/Work Vin, 🎂=Birthday, 📌=остальное."
 )
 
-# Pending overdue tasks from evening digest
 _pending_overdue_by_user: dict[int, list] = {}
 
 # ---------------------------------------------------------------------------
@@ -88,15 +86,21 @@ _pending_overdue_by_user: dict[int, list] = {}
 # ---------------------------------------------------------------------------
 notion = NotionClient(auth=NOTION_TOKEN)
 
-# Поля новой базы Задачи:
-# Задача (title), Зона (select), Приоритет (select), Статус (select),
-# Дедлайн (date), Проект (select), Кто делает (select), Комментарий (text)
-
 ZONES     = ["💼 Бизнес", "👥 Networking", "🏥 Salute", "🧠 Mental",
              "🏠 Family", "💅 Beauty", "✈️ Viaggi", "📚 Ресурсы",
              "✍️ Контент", "💰 Финансы"]
-PRIORITIES = ["🔥 Срочное", "❗ Важное", "✅ Обычное", "🔜 Когда-нибудь"]
+PRIORITIES     = ["❗ Важное", "✅ Обычное", "🔜 Когда-нибудь"]
+PRIORITY_ICONS = {"❗ Важное": "🔴", "✅ Обычное": "🟢", "🔜 Когда-нибудь": "⚪"}
+PRIORITY_ORDER = ["❗ Важное", "✅ Обычное", "🔜 Когда-нибудь"]
 PROJECTS  = ["Generali", "Second Brain", "Развитие бизнеса", "Личное"]
+
+
+def _task_line(t: dict) -> str:
+    icon      = PRIORITY_ICONS.get(t.get("priority", ""), "⚪")
+    deadline  = f" — до {t['deadline']}" if t.get("deadline") else ""
+    performer = t.get("performer", "")
+    who       = f" (→ {performer})" if performer and performer != "Юля" else ""
+    return f"{icon} {t['title']}{deadline}{who}"
 
 
 def notion_create_task(
@@ -107,14 +111,13 @@ def notion_create_task(
     project: str | None,
     comment: str | None,
 ) -> dict:
-    # Нормализуем приоритет
     priority_map = {
-        "срочное": "🔥 Срочное", "важное": "❗ Важное",
-        "обычное": "✅ Обычное", "когда-нибудь": "🔜 Когда-нибудь",
+        "важное": "❗ Важное",
+        "обычное": "✅ Обычное",
+        "когда-нибудь": "🔜 Когда-нибудь",
     }
     priority = priority_map.get(priority.lower().strip(), "✅ Обычное")
 
-    # Нормализуем зону
     zone_map = {
         "бизнес": "💼 Бизнес", "networking": "👥 Networking",
         "нетворкинг": "👥 Networking", "salute": "🏥 Salute",
@@ -128,10 +131,10 @@ def notion_create_task(
     zone = zone_map.get(zone.lower().strip(), zone)
 
     properties = {
-        "Задача":    {"title": [{"text": {"content": title}}]},
-        "Приоритет": {"select": {"name": priority}},
-        "Статус":    {"select": {"name": "To do"}},
-        "Зона":      {"select": {"name": zone}},
+        "Задача":     {"title": [{"text": {"content": title}}]},
+        "Приоритет":  {"select": {"name": priority}},
+        "Статус":     {"select": {"name": "To do"}},
+        "Зона":       {"select": {"name": zone}},
         "Кто делает": {"select": {"name": "Юля"}},
     }
     if deadline:
@@ -158,17 +161,34 @@ def notion_get_tasks() -> list[dict]:
     })
     tasks = []
     for page in response.get("results", []):
-        props    = page.get("properties", {})
-        title    = "".join(t.get("plain_text", "") for t in props.get("Задача", {}).get("title", []))
-        deadline = (props.get("Дедлайн", {}).get("date") or {}).get("start", "")
-        priority = (props.get("Приоритет", {}).get("select") or {}).get("name", "")
-        status   = (props.get("Статус", {}).get("select") or {}).get("name", "")
-        zone     = (props.get("Зона", {}).get("select") or {}).get("name", "")
-        project  = (props.get("Проект", {}).get("select") or {}).get("name", "")
+        props     = page.get("properties", {})
+        title     = "".join(t.get("plain_text", "") for t in props.get("Задача", {}).get("title", []))
+        deadline  = (props.get("Дедлайн", {}).get("date") or {}).get("start", "")
+        priority  = (props.get("Приоритет", {}).get("select") or {}).get("name", "")
+        status    = (props.get("Статус", {}).get("select") or {}).get("name", "")
+        zone      = (props.get("Зона", {}).get("select") or {}).get("name", "")
+        project   = (props.get("Проект", {}).get("select") or {}).get("name", "")
+        performer = (props.get("Кто делает", {}).get("select") or {}).get("name", "")
         tasks.append({
             "id": page["id"], "title": title, "deadline": deadline,
-            "priority": priority, "status": status, "zone": zone, "project": project,
+            "priority": priority, "status": status, "zone": zone,
+            "project": project, "performer": performer,
         })
+    return tasks
+
+
+def notion_get_sospeso() -> list[dict]:
+    response = notion.databases.query(**{
+        "database_id": NOTION_TODOLIST_DB_ID,
+        "filter": {"property": "Статус", "select": {"equals": "Sospeso"}},
+    })
+    tasks = []
+    for page in response.get("results", []):
+        props     = page.get("properties", {})
+        title     = "".join(t.get("plain_text", "") for t in props.get("Задача", {}).get("title", []))
+        priority  = (props.get("Приоритет", {}).get("select") or {}).get("name", "")
+        performer = (props.get("Кто делает", {}).get("select") or {}).get("name", "")
+        tasks.append({"id": page["id"], "title": title, "priority": priority, "performer": performer})
     return tasks
 
 
@@ -199,7 +219,8 @@ def notion_update_deadline(title: str, new_date: str) -> bool:
 
 
 def notion_get_overdue() -> list[dict]:
-    today = datetime.now().strftime("%Y-%m-%d")
+    # "before" today — tasks with deadline today go to "planned", not overdue
+    today = datetime.now(ROME_TZ).strftime("%Y-%m-%d")
     response = notion.databases.query(**{
         "database_id": NOTION_TODOLIST_DB_ID,
         "filter": {"and": [
@@ -207,21 +228,23 @@ def notion_get_overdue() -> list[dict]:
                 {"property": "Статус", "select": {"equals": "To do"}},
                 {"property": "Статус", "select": {"equals": "In progress"}},
             ]},
-            {"property": "Дедлайн", "date": {"on_or_before": today}},
+            {"property": "Дедлайн", "date": {"before": today}},
         ]},
     })
     tasks = []
     for page in response.get("results", []):
-        props    = page.get("properties", {})
-        title    = "".join(t.get("plain_text", "") for t in props.get("Задача", {}).get("title", []))
-        deadline = (props.get("Дедлайн", {}).get("date") or {}).get("start", "")
-        priority = (props.get("Приоритет", {}).get("select") or {}).get("name", "")
-        tasks.append({"id": page["id"], "title": title, "deadline": deadline, "priority": priority})
+        props     = page.get("properties", {})
+        title     = "".join(t.get("plain_text", "") for t in props.get("Задача", {}).get("title", []))
+        deadline  = (props.get("Дедлайн", {}).get("date") or {}).get("start", "")
+        priority  = (props.get("Приоритет", {}).get("select") or {}).get("name", "")
+        performer = (props.get("Кто делает", {}).get("select") or {}).get("name", "")
+        tasks.append({"id": page["id"], "title": title, "deadline": deadline,
+                      "priority": priority, "performer": performer})
     return tasks
 
 
 def notion_get_done_today() -> list[dict]:
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now(ROME_TZ).strftime("%Y-%m-%d")
     response = notion.databases.query(**{
         "database_id": NOTION_TODOLIST_DB_ID,
         "filter": {"property": "Статус", "select": {"equals": "Done"}},
@@ -237,16 +260,36 @@ def notion_get_done_today() -> list[dict]:
     return tasks
 
 
+def notion_get_tomorrow_important() -> list[dict]:
+    import datetime as dt_module
+    tomorrow = (dt_module.date.today() + dt_module.timedelta(days=1)).strftime("%Y-%m-%d")
+    response = notion.databases.query(**{
+        "database_id": NOTION_TODOLIST_DB_ID,
+        "filter": {"and": [
+            {"or": [
+                {"property": "Статус", "select": {"equals": "To do"}},
+                {"property": "Статус", "select": {"equals": "In progress"}},
+            ]},
+            {"property": "Дедлайн", "date": {"equals": tomorrow}},
+            {"property": "Приоритет", "select": {"equals": "❗ Важное"}},
+        ]},
+    })
+    tasks = []
+    for page in response.get("results", []):
+        props     = page.get("properties", {})
+        title     = "".join(t.get("plain_text", "") for t in props.get("Задача", {}).get("title", []))
+        performer = (props.get("Кто делает", {}).get("select") or {}).get("name", "")
+        tasks.append({"id": page["id"], "title": title, "performer": performer})
+    return tasks
+
+
 def format_tasks_list(tasks: list[dict]) -> str:
     if not tasks:
         return "✅ Активных задач нет."
-    icon_map = {"🔥 Срочное": "🔴", "❗ Важное": "🟡", "✅ Обычное": "🟢", "🔜 Когда-нибудь": "⚪"}
     lines = [f"📋 Активные задачи (всего: {len(tasks)}):\n"]
     for t in tasks:
-        icon     = icon_map.get(t["priority"], "⚪")
-        deadline = f" — до {t['deadline']}" if t["deadline"] else ""
-        zone     = f" [{t['zone']}]" if t["zone"] else ""
-        lines.append(f"{icon} {t['title']}{deadline}{zone}")
+        zone = f" [{t['zone']}]" if t.get("zone") else ""
+        lines.append(f"{_task_line(t)}{zone}")
     return "\n".join(lines)
 
 
@@ -255,9 +298,11 @@ def build_notion_context(tasks: list[dict]) -> str:
         return "Список задач пуст."
     lines = ["Текущие задачи Юлии:"]
     for t in tasks:
-        deadline = f", дедлайн {t['deadline']}" if t["deadline"] else ""
-        zone     = f", зона: {t['zone']}" if t["zone"] else ""
-        lines.append(f"- {t['title']} [{t['priority']}{deadline}{zone}]")
+        deadline  = f", дедлайн {t['deadline']}" if t.get("deadline") else ""
+        zone      = f", зона: {t['zone']}" if t.get("zone") else ""
+        performer = t.get("performer", "")
+        who       = f", кто делает: {performer}" if performer and performer != "Юля" else ""
+        lines.append(f"- {t['title']} [{t['priority']}{deadline}{zone}{who}]")
     return "\n".join(lines)
 
 
@@ -294,7 +339,7 @@ GCAL_EMOJI = {
     "Астро-календарь": "🌙", "Work Vin": "🏠", "Vita": "🏠",
     "My calendar": "🏠", "Birthday": "🎂",
 }
-GCAL_SKIP       = {"Tasks", "Ciclo Yuliya"}
+GCAL_SKIP       = {"Tasks", "Ciclo Yuliya", "Астро-календарь"}
 GENERALI_DOMAIN = "@agmonza.it"
 LONG_EVENT_DAYS = 3
 
@@ -326,18 +371,21 @@ def _month_ru(s: str) -> str:
              .replace("Oct","окт").replace("Nov","ноя").replace("Dec","дек"))
 
 
-def get_calendar_events(days: int = 7) -> dict:
+def get_calendar_events(days: int = 7, from_now: bool = False) -> dict:
     creds = _get_gcal_credentials()
     if not creds:
         return {}
     try:
         from datetime import timedelta, date as date_cls
-        service  = gcal_build("calendar", "v3", credentials=creds, cache_discovery=False)
-        now      = datetime.now(ROME_TZ)
-        time_min = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        service = gcal_build("calendar", "v3", credentials=creds, cache_discovery=False)
+        now     = datetime.now(ROME_TZ)
+        if from_now:
+            time_min = now.isoformat()
+        else:
+            time_min = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
         time_max = (now + timedelta(days=days)).replace(hour=23, minute=59, second=59).isoformat()
 
-        cal_list = service.calendarList().list().execute().get("items", [])
+        cal_list  = service.calendarList().list().execute().get("items", [])
         by_date: dict[str, list] = {}
         long_evs: list = []
         birthdays: list = []
@@ -449,91 +497,165 @@ def format_calendar_events(data: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Дайджесты (утро и вечер)
+# Дайджесты
 # ---------------------------------------------------------------------------
+
+def _sort_by_priority(tasks: list[dict]) -> list[dict]:
+    return sorted(tasks, key=lambda t: PRIORITY_ORDER.index(t["priority"])
+                  if t.get("priority") in PRIORITY_ORDER else 2)
+
 
 async def _send_digest(bot: Bot, digest_type: str) -> None:
     if not OWNER_CHAT_ID:
         return
     try:
-        now_str = datetime.now(ROME_TZ).strftime("%d.%m.%Y (%A)")
-        now_str = _weekday_ru(now_str)
+        now      = datetime.now(ROME_TZ)
+        now_str  = _weekday_ru(now.strftime("%d.%m.%Y (%A)"))
+        today_iso = now.strftime("%Y-%m-%d")
 
         if digest_type == "morning":
-            tasks      = notion_get_tasks()
-            events     = get_calendar_events(days=7)
-            cal_text   = format_calendar_events(events)
-            task_ctx   = build_notion_context(tasks)
+            tasks   = notion_get_tasks()
+            overdue = notion_get_overdue()
+            sospeso = notion_get_sospeso()
+            events  = get_calendar_events(days=0)
+            cal_text = format_calendar_events(events).strip()
 
-            system = (
-                SYSTEM_PROMPT
-                + f"\n\nСЕГОДНЯ: {now_str}"
-                + f"\n\n{task_ctx}"
-                + (f"\n\n{cal_text}" if cal_text else "")
+            tasks_today = _sort_by_priority(
+                [t for t in tasks if t.get("deadline") == today_iso]
             )
-            today_iso = datetime.now(ROME_TZ).strftime("%Y-%m-%d")
-            tasks_today = [t for t in tasks if t.get("deadline", "") == today_iso]
-            tasks_today.sort(key=lambda t: ["🔥 Срочное","❗ Важное","✅ Обычное","🔜 Когда-нибудь"].index(t.get("priority","✅ Обычное")) if t.get("priority") in ["🔥 Срочное","❗ Важное","✅ Обычное","🔜 Когда-нибудь"] else 3)
-            total  = len(tasks)
-            urgent = sum(1 for t in tasks_today if "Срочное" in t.get("priority", ""))
-            request = (
-                f"Составь утренний брифинг на {now_str}. "
-                f"Всего активных задач в системе: {total}. "
-                "Структура строго такая:\n"
-                "1. Приветствие + дата (1 строка)\n"
-                "2. События дня — скопируй ДОСЛОВНО из календаря ниже, включая эмодзи и время. Только сегодняшний день.\n"
-                f"3. 📋 Задачи на сегодня ({len(tasks_today)}):\n"
-                "   — отсортированы по приоритету: 🔴 срочные, 🟡 важные, 🟢 обычные\n"
-                "   — показывай только задачи с дедлайном сегодня\n"
-                "   — если задач на сегодня нет — напиши '✅ Задач с дедлайном сегодня нет'\n"
-                "4. Одна строка итога — главное на день.\n"
-                "Plain text, никакого Markdown, никаких звёздочек."
-            )
-            text = clean_markdown(ask_claude(system, request))
 
-        else:
-            done_today = notion_get_done_today()
-            overdue    = notion_get_overdue()
-            active     = notion_get_tasks()
+            parts = [f"Доброе утро, Юлия! {now_str}\n"]
+
+            # 1. Встречи
+            if cal_text:
+                parts.append(cal_text)
+                parts.append("")
+
+            # 2. Запланировано на сегодня
+            if tasks_today:
+                parts.append(f"📋 Запланировано на сегодня ({len(tasks_today)}):")
+                for t in tasks_today:
+                    parts.append(f"  {_task_line(t)}")
+            else:
+                parts.append("📋 Задач с дедлайном сегодня нет.")
+            parts.append("")
+
+            # 3. Просрочено
+            if overdue:
+                parts.append(f"⚠️ Просрочено ({len(overdue)}):")
+                for t in overdue:
+                    parts.append(f"  {_task_line(t)}")
+                parts.append("")
+
+            # 4. Подвисшие
+            if sospeso:
+                parts.append(f"🔄 Подвисшие ({len(sospeso)}):")
+                for t in sospeso:
+                    who = f" (→ {t['performer']})" if t.get("performer") and t["performer"] != "Юля" else ""
+                    parts.append(f"  ⚫ {t['title']}{who}")
+                parts.append("")
+
+            text = "\n".join(parts).strip()
+
+        else:  # evening
+            done_today         = notion_get_done_today()
+            overdue            = notion_get_overdue()
+            tomorrow_important = notion_get_tomorrow_important()
 
             parts = [f"🌙 Вечерняя сводка — {now_str}\n"]
 
+            # 1. Сделано сегодня
             if done_today:
-                parts.append("✅ Выполнено сегодня:")
+                parts.append(f"✅ Сделано сегодня ({len(done_today)}):")
                 for t in done_today:
                     parts.append(f"  • {t['title']}")
                 parts.append("")
 
+            # 2. Просрочено — закрыть или перенести
             if overdue:
-                parts.append("⚠️ Просрочено:")
+                parts.append(f"⚠️ Просрочено ({len(overdue)}) — закрыть или перенести?")
                 for t in overdue:
-                    dl = f" (дедлайн {t['deadline']})" if t["deadline"] else ""
-                    parts.append(f"  • {t['title']}{dl} — перенести?")
+                    parts.append(f"  {_task_line(t)}")
                 parts.append("")
                 _pending_overdue_by_user[int(OWNER_CHAT_ID)] = list(overdue)
 
-            remaining = [t for t in active if t["id"] not in {o["id"] for o in overdue}]
-            if remaining:
-                icon_map = {"🔥 Срочное": "🔴", "❗ Важное": "🟡", "✅ Обычное": "🟢"}
-                parts.append("📋 Активные задачи:")
-                for t in remaining:
-                    icon = icon_map.get(t["priority"], "⚪")
-                    dl   = f" — до {t['deadline']}" if t["deadline"] else ""
-                    parts.append(f"  {icon} {t['title']}{dl}")
+            # 3. Важное на завтра
+            if tomorrow_important:
+                parts.append(f"❗ Важное на завтра ({len(tomorrow_important)}):")
+                for t in tomorrow_important:
+                    who = f" (→ {t['performer']})" if t.get("performer") and t["performer"] != "Юля" else ""
+                    parts.append(f"  🔴 {t['title']}{who}")
                 parts.append("")
 
             closing = clean_markdown(ask_claude(
                 SYSTEM_PROMPT,
-                f"Сегодня {now_str}. Добавь 2 предложения тёплого завершения дня. Plain text.",
+                f"Сегодня {now_str}. Добавь 1 предложение тёплого завершения дня. Plain text.",
             ))
             parts.append(closing)
-            text = "\n".join(parts)
+            text = "\n".join(parts).strip()
 
         await bot.send_message(chat_id=int(OWNER_CHAT_ID), text=text)
         logger.info("%s digest sent", digest_type)
 
     except Exception as e:
         logger.error("%s digest error: %s", digest_type, e)
+
+
+def build_intraday_digest() -> str:
+    now       = datetime.now(ROME_TZ)
+    today_iso = now.strftime("%Y-%m-%d")
+    now_str   = _weekday_ru(now.strftime("%d.%m.%Y (%A)"))
+
+    tasks      = notion_get_tasks()
+    overdue    = notion_get_overdue()
+    sospeso    = notion_get_sospeso()
+    done_today = notion_get_done_today()
+    events     = get_calendar_events(days=0, from_now=True)
+
+    tasks_today = _sort_by_priority(
+        [t for t in tasks if t.get("deadline") == today_iso]
+    )
+
+    parts = [f"📊 Сводка — {now_str}\n"]
+
+    # 1. Встречи (только предстоящие, from_now=True уже фильтрует)
+    today_events = events.get("by_date", {}).get(today_iso, [])
+    if today_events:
+        parts.append("📅 Предстоит сегодня:")
+        for ev in today_events:
+            parts.append(f"  {ev['emoji']} {ev['time']} — {ev['title']}")
+        parts.append("")
+
+    # 2. Сделано сегодня
+    if done_today:
+        parts.append(f"✅ Сделано ({len(done_today)}):")
+        for t in done_today:
+            parts.append(f"  • {t['title']}")
+        parts.append("")
+
+    # 3. Запланировано на сегодня
+    if tasks_today:
+        parts.append(f"📋 Запланировано на сегодня ({len(tasks_today)}):")
+        for t in tasks_today:
+            parts.append(f"  {_task_line(t)}")
+        parts.append("")
+
+    # 4. Просрочено
+    if overdue:
+        parts.append(f"⚠️ Просрочено ({len(overdue)}):")
+        for t in overdue:
+            parts.append(f"  {_task_line(t)}")
+        parts.append("")
+
+    # 5. Подвисшие
+    if sospeso:
+        parts.append(f"🔄 Подвисшие ({len(sospeso)}):")
+        for t in sospeso:
+            who = f" (→ {t['performer']})" if t.get("performer") and t["performer"] != "Юля" else ""
+            parts.append(f"  ⚫ {t['title']}{who}")
+        parts.append("")
+
+    return "\n".join(parts).strip()
 
 
 async def send_weekly_digest(bot: Bot) -> None:
@@ -546,11 +668,9 @@ async def send_weekly_digest(bot: Bot) -> None:
         next_mon = today + timedelta(days=(7 - today.weekday()))
         next_sun = next_mon + timedelta(days=6)
 
-        done_week = notion_get_done_today()  # TODO: расширить на неделю когда будет поле
-        overdue   = notion_get_overdue()
-        events    = get_calendar_events(days=14)
+        overdue = notion_get_overdue()
+        events  = get_calendar_events(days=14)
 
-        # Встречи следующей недели
         next_week_events = []
         cal_by_date = events.get("by_date", {})
         for day_key in sorted(cal_by_date.keys()):
@@ -567,17 +687,16 @@ async def send_weekly_digest(bot: Bot) -> None:
 
         parts = [f"📊 Недельная сводка — {now_str}\n"]
 
-        if overdue:
-            parts.append(f"⚠️ Просрочено ({len(overdue)}):")
-            for t in overdue:
-                dl = f" (до {t['deadline']})" if t.get("deadline") else ""
-                parts.append(f"  🔴 {t['title']}{dl}")
-            parts.append("")
-
         if next_week_events:
             parts.append(f"📅 Встречи на следующей неделе ({next_mon.strftime('%d.%m')}–{next_sun.strftime('%d.%m')}):")
             for ev in next_week_events:
                 parts.append(f"  {ev}")
+            parts.append("")
+
+        if overdue:
+            parts.append(f"⚠️ Просрочено ({len(overdue)}):")
+            for t in overdue:
+                parts.append(f"  {_task_line(t)}")
             parts.append("")
 
         closing = clean_markdown(ask_claude(
@@ -586,14 +705,11 @@ async def send_weekly_digest(bot: Bot) -> None:
         ))
         parts.append(closing)
 
-        await bot.send_message(chat_id=int(OWNER_CHAT_ID), text="\n".join(parts))
+        await bot.send_message(chat_id=int(OWNER_CHAT_ID), text="\n".join(parts).strip())
         logger.info("Weekly digest sent")
 
     except Exception as e:
         logger.error("Weekly digest error: %s", e)
-
-
-
 
 
 async def send_morning_digest(bot: Bot) -> None:
@@ -626,7 +742,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     message = update.message.text or ""
     doc     = update.message.document
 
-    # Файл
     if doc:
         await update.message.reply_text("⏳ Читаю файл...")
         try:
@@ -648,13 +763,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     tomorrow_str = (today_date + dt_module.timedelta(days=1)).strftime("%Y-%m-%d")
     today_iso    = today_date.strftime("%Y-%m-%d")
 
-    # Подтянуть просроченные из вечернего дайджеста
     if user_id in _pending_overdue_by_user:
         context.user_data["pending_overdue"] = _pending_overdue_by_user.pop(user_id)
         if context.user_data["pending_overdue"]:
             context.user_data["last_task"] = context.user_data["pending_overdue"][0]["title"]
 
-    # Шаг 1: обработка просроченных задач в очереди
     pending_tasks = context.user_data.get("pending_overdue", [])
     last_task     = context.user_data.get("last_task", "")
     task_title    = last_task or (pending_tasks[0]["title"] if pending_tasks else "")
@@ -712,12 +825,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 context.user_data.pop("pending_overdue", None)
             return
 
-    # Шаг 2: определить намерение через Claude
     INTENT_PROMPT = (
         f"Сегодня {today_iso}. Сообщение: «{message}»\n\n"
         "Определи намерение. Ответь ТОЛЬКО одним из кодов:\n"
+        "SHOW_DIGEST — показать текущую сводку (встречи + задачи)\n"
         "SHOW_ALL — показать все активные задачи\n"
-        "SHOW_OVERDUE — показать просроченные\n"
+        "SHOW_OVERDUE — показать просроченные задачи\n"
         "CLOSE: <название> — закрыть задачу\n"
         "RESCHEDULE: <название> | <YYYY-MM-DD> — перенести дедлайн\n"
         "CREATE_TASK — создать задачу\n"
@@ -731,6 +844,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     logger.info("Intent: %s", intent)
 
+    if intent.startswith("SHOW_DIGEST"):
+        try:
+            await update.message.reply_text(build_intraday_digest())
+        except Exception as e:
+            logger.error("Intraday digest error: %s", e)
+            await update.message.reply_text(f"Ошибка: {e}")
+        return
+
     if intent.startswith("SHOW_ALL"):
         tasks = notion_get_tasks()
         await update.message.reply_text(format_tasks_list(tasks))
@@ -741,12 +862,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if not overdue:
             await update.message.reply_text("✅ Просроченных задач нет!")
         else:
-            icon_map = {"🔥 Срочное": "🔴", "❗ Важное": "🟡", "✅ Обычное": "🟢"}
             lines = [f"⚠️ Просроченные ({len(overdue)}):"]
             for t in overdue:
-                icon = icon_map.get(t["priority"], "⚪")
-                dl   = f" (до {t['deadline']})" if t["deadline"] else ""
-                lines.append(f"{icon} {t['title']}{dl}")
+                lines.append(f"  {_task_line(t)}")
             context.user_data["pending_overdue"] = overdue
             context.user_data["last_task"]       = overdue[0]["title"]
             lines.append(f"\nПеренести «{overdue[0]['title']}»? (да / дата / закрой)")
@@ -777,7 +895,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             "Извлеки параметры задачи. Для каждой задачи — отдельный блок через '---':\n"
             "TITLE: <название>\n"
             "DEADLINE: <YYYY-MM-DD или пусто>\n"
-            "PRIORITY: <Срочное|Важное|Обычное|Когда-нибудь>\n"
+            "PRIORITY: <Важное|Обычное|Когда-нибудь>\n"
             f"ZONE: <одно из: {', '.join(ZONES)}>\n"
             f"PROJECT: <одно из: {', '.join(PROJECTS)} или пусто>\n"
             "COMMENT: <дополнительный контекст или пусто>\n\n"
@@ -790,7 +908,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             for block in blocks:
                 kv = {l.split(":")[0].strip(): ":".join(l.split(":")[1:]).strip()
                       for l in block.splitlines() if ":" in l}
-                title   = kv.get("TITLE", "").strip()
+                title = kv.get("TITLE", "").strip()
                 if not title:
                     continue
                 notion_create_task(
@@ -813,10 +931,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         except Exception as e:
             logger.error("Task creation error: %s", e)
 
-    # Шаг 3: обычный ответ с контекстом задач и календаря
+    # Обычный ответ с контекстом задач и календаря
     try:
-        tasks  = notion_get_tasks()
-        events = get_calendar_events(days=7)
+        tasks    = notion_get_tasks()
+        events   = get_calendar_events(days=7)
         cal_text = format_calendar_events(events)
         now_str  = _weekday_ru(datetime.now(ROME_TZ).strftime("%d.%m.%Y (%A)"))
 
