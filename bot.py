@@ -245,21 +245,16 @@ def notion_get_overdue() -> list[dict]:
 
 def notion_get_done_today() -> list[dict]:
     today = datetime.now(ROME_TZ).strftime("%Y-%m-%d")
-    # Compute midnight Rome time in UTC so the filter covers the full local day
-    day_start_utc = (
-        ROME_TZ.localize(datetime.strptime(today, "%Y-%m-%d"))
-        .astimezone(pytz.UTC)
-        .strftime("%Y-%m-%dT%H:%M:%S.000Z")
-    )
+    # DEBUG: fetch all Done tasks (no timestamp filter) to verify status filter works
     response = notion.databases.query(**{
         "database_id": NOTION_TODOLIST_DB_ID,
-        "filter": {"and": [
-            {"property": "Статус", "select": {"equals": "Done"}},
-            {"timestamp": "last_edited_time", "last_edited_time": {"on_or_after": day_start_utc}},
-        ]},
+        "filter": {"property": "Статус", "select": {"equals": "Done"}},
         "sorts": [{"timestamp": "last_edited_time", "direction": "descending"}],
-        "page_size": 50,
+        "page_size": 10,
     })
+    logger.info("notion_get_done_today: %d results, today=%s", len(response.get("results", [])), today)
+    for p in response.get("results", [])[:3]:
+        logger.info("  page last_edited=%s", p.get("last_edited_time"))
     tasks = []
     for page in response.get("results", []):
         props = page.get("properties", {})
