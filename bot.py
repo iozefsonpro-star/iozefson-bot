@@ -245,18 +245,25 @@ def notion_get_overdue() -> list[dict]:
 
 def notion_get_done_today() -> list[dict]:
     today = datetime.now(ROME_TZ).strftime("%Y-%m-%d")
-    # DEBUG: fetch all Done tasks (no timestamp filter) to verify status filter works
     response = notion.databases.query(**{
         "database_id": NOTION_TODOLIST_DB_ID,
         "filter": {"property": "Статус", "select": {"equals": "Done"}},
         "sorts": [{"timestamp": "last_edited_time", "direction": "descending"}],
-        "page_size": 10,
+        "page_size": 50,
     })
-    logger.info("notion_get_done_today: %d results, today=%s", len(response.get("results", [])), today)
-    for p in response.get("results", [])[:3]:
-        logger.info("  page last_edited=%s", p.get("last_edited_time"))
     tasks = []
     for page in response.get("results", []):
+        edited_utc = page.get("last_edited_time", "")
+        if not edited_utc:
+            continue
+        try:
+            edited_rome = datetime.fromisoformat(
+                edited_utc.replace("Z", "+00:00")
+            ).astimezone(ROME_TZ).strftime("%Y-%m-%d")
+        except Exception:
+            edited_rome = edited_utc[:10]
+        if edited_rome != today:
+            continue  # skip older tasks, but keep scanning (no break)
         props = page.get("properties", {})
         title = "".join(t.get("plain_text", "") for t in props.get("Задача", {}).get("title", []))
         if title:
