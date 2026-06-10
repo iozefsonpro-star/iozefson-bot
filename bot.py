@@ -248,11 +248,23 @@ def notion_get_done_today() -> list[dict]:
     response = notion.databases.query(**{
         "database_id": NOTION_TODOLIST_DB_ID,
         "filter": {"property": "Статус", "select": {"equals": "Done"}},
+        "sorts": [{"timestamp": "last_edited_time", "direction": "descending"}],
+        "page_size": 50,
     })
     tasks = []
     for page in response.get("results", []):
-        edited = page.get("last_edited_time", "")[:10]
-        if edited != today:
+        edited_utc = page.get("last_edited_time", "")
+        if not edited_utc:
+            continue
+        try:
+            edited_rome = datetime.fromisoformat(
+                edited_utc.replace("Z", "+00:00")
+            ).astimezone(ROME_TZ).strftime("%Y-%m-%d")
+        except Exception:
+            edited_rome = edited_utc[:10]
+        if edited_rome < today:
+            break  # отсортировано по убыванию — дальше только старые
+        if edited_rome != today:
             continue
         props = page.get("properties", {})
         title = "".join(t.get("plain_text", "") for t in props.get("Задача", {}).get("title", []))
