@@ -1234,7 +1234,7 @@ async def post_init(app: Application) -> None:
                       args=[app.bot], id="morning", replace_existing=True)
     # Вечерняя — все дни кроме пятницы
     scheduler.add_job(send_evening_digest,
-                      CronTrigger(day_of_week="mon,tue,wed,thu,sat,sun", hour=21, minute=0, timezone=ROME_TZ),
+                      CronTrigger(day_of_week="mon,tue,wed,thu,sat", hour=21, minute=0, timezone=ROME_TZ),
                       args=[app.bot], id="evening", replace_existing=True)
     # Пятница 21:00 — расширенная пятничная сводка
     scheduler.add_job(send_friday_digest,
@@ -1245,7 +1245,7 @@ async def post_init(app: Application) -> None:
                       CronTrigger(day_of_week="sun", hour=9, minute=0, timezone=ROME_TZ),
                       args=[app.bot], id="sunday", replace_existing=True)
     scheduler.start()
-    logger.info("Scheduler started: 08:00 / 21:00 (пн-чт,сб) / пт 21:00 / вс 09:00 Europe/Rome")
+    logger.info("Scheduler started: 08:00 / 21:00 (пн-чт,сб) / пт 21:00 / вс 09:00 (утро) Europe/Rome")
 
 
 def main() -> None:
