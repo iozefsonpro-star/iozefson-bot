@@ -218,6 +218,46 @@ def notion_update_deadline(title: str, new_date: str) -> bool:
     return True
 
 
+def notion_close_task_by_id(page_id: str) -> bool:
+    try:
+        notion.pages.update(page_id=page_id,
+                            properties={"Статус": {"select": {"name": "Done"}}})
+        return True
+    except Exception:
+        return False
+
+
+def notion_update_deadline_by_id(page_id: str, new_date: str) -> bool:
+    try:
+        notion.pages.update(page_id=page_id,
+                            properties={"Дедлайн": {"date": {"start": new_date}}})
+        return True
+    except Exception:
+        return False
+
+
+def find_task_by_description(description: str, tasks: list[dict]) -> dict | None:
+    """Fuzzy match: Claude picks the best task from the list by semantic similarity."""
+    if not tasks:
+        return None
+    task_list = "\n".join(f"{i + 1}. {t['title']}" for i, t in enumerate(tasks))
+    prompt = (
+        f"Пользователь описывает задачу: «{description}»\n\n"
+        f"Список задач:\n{task_list}\n\n"
+        "Какой номер задачи лучше всего соответствует описанию? "
+        "Учти семантическое сходство — название задачи может сильно отличаться от описания пользователя. "
+        "Ответь ТОЛЬКО одной цифрой (1, 2, 3...). Если ни одна не подходит — ответь 0."
+    )
+    try:
+        result = ask_claude(prompt, description, model=MODEL_SMART).strip()
+        idx = int(result) - 1
+        if 0 <= idx < len(tasks):
+            return tasks[idx]
+    except Exception:
+        pass
+    return None
+
+
 def notion_get_overdue() -> list[dict]:
     # "before" today — tasks with deadline today go to "planned", not overdue
     today = datetime.now(ROME_TZ).strftime("%Y-%m-%d")
@@ -1005,15 +1045,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if task_title:
         handled = False
 
+        task_id = pending_tasks[0]["id"] if pending_tasks else None
+
         if any(kw in msg_lower for kw in ["уже сделано", "закрой", "выполнено", "сделано", "готово", "done"]):
-            done = notion_close_task(task_title)
+            done = notion_close_task_by_id(task_id) if task_id else notion_close_task(task_title)
             await update.message.reply_text(
                 f"✅ Закрыла: {task_title}" if done else f"❌ Не нашла: {task_title}"
             )
             handled = True
 
         elif any(kw in msg_lower for kw in ["да", "перенеси", "перенести", "завтра", "yes"]):
-            done = notion_update_deadline(task_title, tomorrow_str)
+            done = (notion_update_deadline_by_id(task_id, tomorrow_str) if task_id
+                    else notion_update_deadline(task_title, tomorrow_str))
             await update.message.reply_text(
                 f"✅ Перенесла на {tomorrow_str}: {task_title}" if done
                 else f"❌ Не нашла: {task_title}"
@@ -1029,7 +1072,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     message, model=MODEL_SMART,
                 ).strip()
                 if parsed_date != "NONE" and len(parsed_date) == 10:
-                    done = notion_update_deadline(task_title, parsed_date)
+                    done = (notion_update_deadline_by_id(task_id, parsed_date) if task_id
+                            else notion_update_deadline(task_title, parsed_date))
                     await update.message.reply_text(
                         f"✅ Перенесла на {parsed_date}: {task_title}" if done
                         else f"❌ Не нашла: {task_title}"
@@ -1114,21 +1158,38 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     if intent.startswith("CLOSE:"):
-        title = intent[6:].strip()
-        done  = notion_close_task(title)
-        await update.message.reply_text(
-            f"✅ Закрыла: {title}" if done else f"❌ Не нашла: {title}"
-        )
+        description = intent[6:].strip()
+        all_tasks   = notion_get_tasks()
+        matched     = find_task_by_description(description, all_tasks)
+        if matched:
+            done = notion_close_task_by_id(matched["id"])
+            await update.message.reply_text(
+                f"✅ Закрыла: {matched['title']}" if done
+                else f"❌ Ошибка при закрытии: {matched['title']}"
+            )
+        else:
+            await update.message.reply_text(
+                f"❓ Не нашла похожую задачу по описанию «{description}». Уточни?"
+            )
         return
 
     if intent.startswith("RESCHEDULE:"):
         parts = intent[11:].split("|")
         if len(parts) == 2:
-            done = notion_update_deadline(parts[0].strip(), parts[1].strip())
-            await update.message.reply_text(
-                f"✅ Перенесла на {parts[1].strip()}: {parts[0].strip()}" if done
-                else f"❌ Не нашла: {parts[0].strip()}"
-            )
+            description = parts[0].strip()
+            new_date    = parts[1].strip()
+            all_tasks   = notion_get_tasks()
+            matched     = find_task_by_description(description, all_tasks)
+            if matched:
+                done = notion_update_deadline_by_id(matched["id"], new_date)
+                await update.message.reply_text(
+                    f"✅ Перенесла на {new_date}: {matched['title']}" if done
+                    else f"❌ Ошибка при переносе: {matched['title']}"
+                )
+            else:
+                await update.message.reply_text(
+                    f"❓ Не нашла задачу по описанию «{description}». Уточни?"
+                )
             return
 
     if intent.startswith("CREATE_TASK"):
