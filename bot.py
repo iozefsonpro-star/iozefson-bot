@@ -294,6 +294,122 @@ def notion_get_tomorrow_important() -> list[dict]:
     return tasks
 
 
+def notion_get_done_this_week() -> list[dict]:
+    """Tasks with status Done, last-edited Mon–Fri of current week (Rome TZ)."""
+    import datetime as dt_module
+    now        = datetime.now(ROME_TZ)
+    week_start = now.date() - dt_module.timedelta(days=now.weekday())  # Monday
+    week_end   = week_start + dt_module.timedelta(days=4)              # Friday
+
+    response = notion.databases.query(**{
+        "database_id": NOTION_TODOLIST_DB_ID,
+        "filter": {"property": "Статус", "select": {"equals": "Done"}},
+        "sorts": [{"timestamp": "last_edited_time", "direction": "descending"}],
+        "page_size": 100,
+    })
+    tasks = []
+    for page in response.get("results", []):
+        edited_utc = page.get("last_edited_time", "")
+        if not edited_utc:
+            continue
+        try:
+            edited_date = datetime.fromisoformat(
+                edited_utc.replace("Z", "+00:00")
+            ).astimezone(ROME_TZ).date()
+        except Exception:
+            continue
+        if not (week_start <= edited_date <= week_end):
+            continue
+        props = page.get("properties", {})
+        title = "".join(t.get("plain_text", "") for t in props.get("Задача", {}).get("title", []))
+        zone  = (props.get("Зона", {}).get("select") or {}).get("name", "")
+        if title:
+            tasks.append({"id": page["id"], "title": title, "zone": zone})
+    return tasks
+
+
+def notion_get_undone_deadline_this_week() -> list[dict]:
+    """Tasks with deadline Mon–Fri of current week, status NOT Done."""
+    import datetime as dt_module
+    now        = datetime.now(ROME_TZ)
+    week_start = now.date() - dt_module.timedelta(days=now.weekday())
+    week_end   = week_start + dt_module.timedelta(days=4)
+
+    response = notion.databases.query(**{
+        "database_id": NOTION_TODOLIST_DB_ID,
+        "filter": {"and": [
+            {"or": [
+                {"property": "Статус", "select": {"equals": "To do"}},
+                {"property": "Статус", "select": {"equals": "In progress"}},
+                {"property": "Статус", "select": {"equals": "Sospeso"}},
+            ]},
+            {"property": "Дедлайн", "date": {"on_or_after": str(week_start)}},
+            {"property": "Дедлайн", "date": {"on_or_before": str(week_end)}},
+        ]},
+    })
+    tasks = []
+    for page in response.get("results", []):
+        props    = page.get("properties", {})
+        title    = "".join(t.get("plain_text", "") for t in props.get("Задача", {}).get("title", []))
+        zone     = (props.get("Зона", {}).get("select") or {}).get("name", "")
+        deadline = (props.get("Дедлайн", {}).get("date") or {}).get("start", "")
+        if title:
+            tasks.append({"id": page["id"], "title": title, "zone": zone, "deadline": deadline})
+    return tasks
+
+
+def notion_get_next_week_tasks() -> dict:
+    """For Sunday digest: tasks grouped for next Mon–Fri."""
+    import datetime as dt_module
+    now        = datetime.now(ROME_TZ)
+    days_ahead = (7 - now.weekday()) % 7 or 7  # days until next Monday
+    next_mon   = now.date() + dt_module.timedelta(days=days_ahead)
+    next_fri   = next_mon + dt_module.timedelta(days=4)
+
+    deadline_resp = notion.databases.query(**{
+        "database_id": NOTION_TODOLIST_DB_ID,
+        "filter": {"and": [
+            {"or": [
+                {"property": "Статус", "select": {"equals": "To do"}},
+                {"property": "Статус", "select": {"equals": "In progress"}},
+                {"property": "Статус", "select": {"equals": "Sospeso"}},
+            ]},
+            {"property": "Дедлайн", "date": {"on_or_after": str(next_mon)}},
+            {"property": "Дедлайн", "date": {"on_or_before": str(next_fri)}},
+        ]},
+    })
+    no_deadline_resp = notion.databases.query(**{
+        "database_id": NOTION_TODOLIST_DB_ID,
+        "filter": {"and": [
+            {"or": [
+                {"property": "Статус", "select": {"equals": "To do"}},
+                {"property": "Статус", "select": {"equals": "In progress"}},
+            ]},
+            {"property": "Дедлайн", "date": {"is_empty": True}},
+        ]},
+    })
+
+    def _parse(page: dict) -> dict | None:
+        props    = page.get("properties", {})
+        title    = "".join(t.get("plain_text", "") for t in props.get("Задача", {}).get("title", []))
+        zone     = (props.get("Зона", {}).get("select") or {}).get("name", "")
+        priority = (props.get("Приоритет", {}).get("select") or {}).get("name", "")
+        return {"title": title, "zone": zone, "priority": priority} if title else None
+
+    deadline_tasks  = [t for p in deadline_resp.get("results", []) if (t := _parse(p))]
+    no_dl_tasks     = [t for p in no_deadline_resp.get("results", []) if (t := _parse(p))]
+    important_tasks = [t for t in no_dl_tasks if t["priority"] == "❗ Важное"]
+    queue_tasks     = [t for t in no_dl_tasks if t["priority"] != "❗ Важное"][:5]
+
+    return {
+        "deadline_tasks":  deadline_tasks,
+        "important_tasks": important_tasks,
+        "queue_tasks":     queue_tasks,
+        "next_mon":        next_mon,
+        "next_fri":        next_fri,
+    }
+
+
 def format_tasks_list(tasks: list[dict]) -> str:
     if not tasks:
         return "✅ Активных задач нет."
@@ -669,58 +785,160 @@ def build_intraday_digest() -> str:
     return "\n".join(parts).strip()
 
 
-async def send_weekly_digest(bot: Bot) -> None:
+async def send_friday_digest(bot: Bot) -> None:
+    """Пятничная вечерняя сводка — итоги недели (расширенный формат по ТЗ)."""
     if not OWNER_CHAT_ID:
         return
     try:
-        from datetime import timedelta, date as date_cls
-        now_str  = _weekday_ru(datetime.now(ROME_TZ).strftime("%d.%m.%Y (%A)"))
-        today    = datetime.now(ROME_TZ).date()
-        next_mon = today + timedelta(days=(7 - today.weekday()))
-        next_sun = next_mon + timedelta(days=6)
+        import datetime as dt_module
+        now     = datetime.now(ROME_TZ)
+        now_str = now.strftime("%d.%m.%Y")
 
-        overdue = notion_get_overdue()
-        events  = get_calendar_events(days=14)
+        week_start = now.date() - dt_module.timedelta(days=now.weekday())
+        saturday   = week_start + dt_module.timedelta(days=5)
+        sunday     = week_start + dt_module.timedelta(days=6)
 
-        next_week_events = []
+        done_week        = notion_get_done_this_week()
+        undone_this_week = notion_get_undone_deadline_this_week()
+        done_today       = notion_get_done_today()
+
+        events      = get_calendar_events(days=3)
         cal_by_date = events.get("by_date", {})
-        for day_key in sorted(cal_by_date.keys()):
-            try:
-                d = date_cls.fromisoformat(day_key)
-                if next_mon <= d <= next_sun:
-                    for ev in cal_by_date[day_key]:
-                        weekday = _weekday_ru(d.strftime("%A"))
-                        next_week_events.append(
-                            f"{ev['emoji']} {weekday} {d.strftime('%d.%m')} {ev['time']} — {ev['title']}"
-                        )
-            except Exception:
-                pass
+        sat_events  = cal_by_date.get(str(saturday), [])
+        sun_events  = cal_by_date.get(str(sunday), [])
 
-        parts = [f"📊 Недельная сводка — {now_str}\n"]
+        parts = [f"📊 Итоги недели — {now_str} (Пт)\n"]
 
-        if next_week_events:
-            parts.append(f"📅 Встречи на следующей неделе ({next_mon.strftime('%d.%m')}–{next_sun.strftime('%d.%m')}):")
-            for ev in next_week_events:
-                parts.append(f"  {ev}")
+        # 1. Сделано за неделю — grouped by Зона
+        if done_week:
+            parts.append("✅ Сделано за неделю:")
+            by_zone: dict[str, list[str]] = {}
+            for t in done_week:
+                zone = t.get("zone") or "📌 Без зоны"
+                by_zone.setdefault(zone, []).append(t["title"])
+            for zone, titles in by_zone.items():
+                parts.append(f"[{zone}]: {', '.join(titles)}")
+
+            top_zone = max(by_zone, key=lambda z: len(by_zone[z]))
+            focus = clean_markdown(ask_claude(
+                SYSTEM_PROMPT,
+                f"На этой неделе больше всего задач закрыто в зоне '{top_zone}'. "
+                "Напиши одно предложение: 'На этой неделе фокус был на [зона]'. Только plain text.",
+            ))
+            parts.append(f"\n{focus}")
+        else:
+            parts.append("✅ Сделано за неделю: —")
+        parts.append("")
+
+        # 2. Переносится (только если есть)
+        if undone_this_week:
+            parts.append("⏩ Переносится на следующую неделю:")
+            for t in undone_this_week:
+                zone = f"[{t['zone']}] " if t.get("zone") else ""
+                parts.append(f"• {zone}{t['title']}")
             parts.append("")
 
-        if overdue:
-            parts.append(f"⚠️ Просрочено ({len(overdue)}):")
-            for t in overdue:
-                parts.append(f"  {_task_line(t)}")
+        # 3. Выходные
+        parts.append("📅 Выходные:")
+        sat_fmt  = saturday.strftime("%d.%m")
+        sun_fmt  = sunday.strftime("%d.%m")
+        sat_line = (", ".join(f"{ev['emoji']} {ev['time']} — {ev['title']}" for ev in sat_events)
+                    if sat_events else "свободно")
+        sun_line = (", ".join(f"{ev['emoji']} {ev['time']} — {ev['title']}" for ev in sun_events)
+                    if sun_events else "свободно")
+        parts.append(f"Сб {sat_fmt} — {sat_line}")
+        parts.append(f"Вс {sun_fmt} — {sun_line}")
+        parts.append("")
+
+        # 4. Сделано сегодня
+        if done_today:
+            parts.append(f"✅ Сделано сегодня ({len(done_today)}):")
+            for t in done_today:
+                parts.append(f"• {t['title']}")
             parts.append("")
 
-        closing = clean_markdown(ask_claude(
-            SYSTEM_PROMPT,
-            f"Сегодня пятница {now_str}. Добавь 2 строки — короткий итог недели и пожелание выходных. Plain text.",
-        ))
-        parts.append(closing)
+        parts.append("Хорошего уик-энда! 🌅")
 
         await bot.send_message(chat_id=int(OWNER_CHAT_ID), text="\n".join(parts).strip())
-        logger.info("Weekly digest sent")
+        logger.info("Friday digest sent")
 
     except Exception as e:
-        logger.error("Weekly digest error: %s", e)
+        logger.error("Friday digest error: %s", e)
+
+
+async def send_sunday_digest(bot: Bot) -> None:
+    """Воскресная сводка — старт следующей рабочей недели."""
+    if not OWNER_CHAT_ID:
+        return
+    try:
+        import datetime as dt_module
+        now     = datetime.now(ROME_TZ)
+        now_str = now.strftime("%d.%m.%Y")
+
+        week_data = notion_get_next_week_tasks()
+        next_mon  = week_data["next_mon"]
+        next_fri  = week_data["next_fri"]
+
+        days_to_mon = (next_mon - now.date()).days
+        events      = get_calendar_events(days=days_to_mon + 5)
+        cal_by_date = events.get("by_date", {})
+
+        weekdays_ru = ["Пн", "Вт", "Ср", "Чт", "Пт"]
+        cal_lines   = []
+        for i, wd in enumerate(weekdays_ru):
+            day      = next_mon + dt_module.timedelta(days=i)
+            day_fmt  = day.strftime("%d.%m")
+            day_evs  = cal_by_date.get(str(day), [])
+            ev_str   = (", ".join(f"{ev['emoji']} {ev['time']} — {ev['title']}" for ev in day_evs)
+                        if day_evs else "свободно")
+            cal_lines.append(f"{wd} {day_fmt} — {ev_str}")
+
+        all_week_tasks = week_data["deadline_tasks"] + week_data["important_tasks"]
+        queue_tasks    = week_data["queue_tasks"]
+
+        zone_count: dict[str, int] = {}
+        for t in all_week_tasks:
+            z = t.get("zone") or "📌 Без зоны"
+            zone_count[z] = zone_count.get(z, 0) + 1
+
+        parts = [f"📅 Старт недели — {now_str} (Вс)\n"]
+        parts.append("Впереди 5 рабочих дней\n")
+
+        parts.append("🗓 Календарь недели:")
+        parts.extend(cal_lines)
+        parts.append("")
+
+        if all_week_tasks:
+            parts.append("🎯 Задачи на эту неделю:")
+            for t in all_week_tasks:
+                zone = f"[{t['zone']}] " if t.get("zone") else ""
+                parts.append(f"• {zone}{t['title']}")
+            parts.append("")
+
+        if queue_tasks:
+            parts.append("🔜 Висит в очереди:")
+            for t in queue_tasks:
+                zone = f"[{t['zone']}] " if t.get("zone") else ""
+                parts.append(f"• {zone}{t['title']}")
+            parts.append("")
+
+        if zone_count:
+            top_zone = max(zone_count, key=lambda z: zone_count[z])
+            focus = clean_markdown(ask_claude(
+                SYSTEM_PROMPT,
+                f"На следующей неделе больше всего задач в зоне '{top_zone}'. "
+                "Напиши одно предложение про фокус недели. Только plain text.",
+            ))
+        else:
+            focus = "Хорошая неделя для планирования."
+        parts.append("💭 Фокус недели:")
+        parts.append(focus)
+
+        await bot.send_message(chat_id=int(OWNER_CHAT_ID), text="\n".join(parts).strip())
+        logger.info("Sunday digest sent")
+
+    except Exception as e:
+        logger.error("Sunday digest error: %s", e)
 
 
 async def send_morning_digest(bot: Bot) -> None:
@@ -1014,12 +1232,20 @@ async def post_init(app: Application) -> None:
     scheduler = AsyncIOScheduler(timezone=ROME_TZ)
     scheduler.add_job(send_morning_digest, CronTrigger(hour=8, minute=0, timezone=ROME_TZ),
                       args=[app.bot], id="morning", replace_existing=True)
-    scheduler.add_job(send_evening_digest, CronTrigger(hour=21, minute=0, timezone=ROME_TZ),
+    # Вечерняя — все дни кроме пятницы
+    scheduler.add_job(send_evening_digest,
+                      CronTrigger(day_of_week="mon,tue,wed,thu,sat,sun", hour=21, minute=0, timezone=ROME_TZ),
                       args=[app.bot], id="evening", replace_existing=True)
-    scheduler.add_job(send_weekly_digest, CronTrigger(day_of_week="fri", hour=21, minute=5, timezone=ROME_TZ),
-                      args=[app.bot], id="weekly", replace_existing=True)
+    # Пятница 21:00 — расширенная пятничная сводка
+    scheduler.add_job(send_friday_digest,
+                      CronTrigger(day_of_week="fri", hour=21, minute=0, timezone=ROME_TZ),
+                      args=[app.bot], id="friday", replace_existing=True)
+    # Воскресенье 09:00 — старт недели
+    scheduler.add_job(send_sunday_digest,
+                      CronTrigger(day_of_week="sun", hour=9, minute=0, timezone=ROME_TZ),
+                      args=[app.bot], id="sunday", replace_existing=True)
     scheduler.start()
-    logger.info("Scheduler started: 08:00 / 21:00 / пятница 21:05 Europe/Rome")
+    logger.info("Scheduler started: 08:00 / 21:00 (пн-чт,сб) / пт 21:00 / вс 09:00 Europe/Rome")
 
 
 def main() -> None:
