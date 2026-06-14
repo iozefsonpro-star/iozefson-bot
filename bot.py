@@ -760,36 +760,49 @@ def get_astro_events(today_iso: str) -> list[dict]:
         window_start = ROME_TZ.localize(day.replace(hour=8,  minute=0, second=0, microsecond=0))
         window_end   = ROME_TZ.localize(day.replace(hour=21, minute=0, second=0, microsecond=0))
 
-        cal_list  = service.calendarList().list().execute().get("items", [])
+        cal_list      = service.calendarList().list().execute().get("items", [])
+        cal_names     = [c.get("summary", "") for c in cal_list]
+        logger.info("Astro: calendars in list: %s", cal_names)
         astro_cal = next((c for c in cal_list if c.get("summary") == ASTRO_CAL_NAME), None)
         if not astro_cal:
-            logger.warning("Астро-календарь не найден в списке Google Calendar")
+            logger.warning("Астро-календарь не найден. Доступные: %s", cal_names)
             return []
 
+        # timeMin = начало дня (не 08:00) чтобы поймать события стартующие ночью
+        day_start = ROME_TZ.localize(day.replace(hour=0, minute=0, second=0, microsecond=0))
         result = service.events().list(
             calendarId=astro_cal["id"],
-            timeMin=window_start.isoformat(),
+            timeMin=day_start.isoformat(),
             timeMax=window_end.isoformat(),
             singleEvents=True,
             orderBy="startTime",
             maxResults=20,
         ).execute()
 
+        raw_items = result.get("items", [])
+        logger.info("Astro: found %d events before filtering", len(raw_items))
+
         events = []
-        for ev in result.get("items", []):
+        for ev in raw_items:
             title     = ev.get("summary", "(без названия)")
             start_raw = ev["start"].get("dateTime", ev["start"].get("date", ""))
             end_raw   = ev["end"].get("dateTime",   ev["end"].get("date", ""))
             if "T" in start_raw:
                 dt_start = datetime.fromisoformat(start_raw).astimezone(ROME_TZ)
                 dt_end   = datetime.fromisoformat(end_raw).astimezone(ROME_TZ)
+                # пропустить события заканчивающиеся до 08:00
+                if dt_end <= window_start:
+                    continue
                 events.append({
                     "name":  title,
                     "start": dt_start.strftime("%H:%M"),
                     "end":   dt_end.strftime("%H:%M"),
                 })
             else:
+                # all-day events — включаем всегда (астро-период на весь день)
                 events.append({"name": title, "start": "весь день", "end": "весь день"})
+
+        logger.info("Astro: %d events after filtering: %s", len(events), [e["name"] for e in events])
         return events
     except Exception as e:
         logger.error("Astro calendar fetch error: %s", e)
@@ -1257,6 +1270,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 context.user_data.pop("last_task", None)
                 context.user_data.pop("pending_overdue", None)
             return
+
+    # Диагностика астро-блока
+    if msg_lower.strip() in ("астро тест", "/astro"):
+        try:
+            today_iso_dbg = datetime.now(ROME_TZ).strftime("%Y-%m-%d")
+            dbg_events    = get_astro_events(today_iso_dbg)
+            if not dbg_events:
+                await update.message.reply_text("Астро: событий не найдено (get_astro_events вернул [])")
+            else:
+                lines = [f"Найдено {len(dbg_events)} астро-событий:"]
+                for e in dbg_events:
+                    lines.append(f"• {e['name']} ({e['start']}–{e['end']})")
+                block = build_astro_block(dbg_events, [], _weekday_ru(datetime.now(ROME_TZ).strftime("%d.%m.%Y (%A)")))
+                lines.append("\n--- Блок от Claude ---")
+                lines.append(block if block else "(Claude вернул пустой ответ)")
+                await update.message.reply_text("\n".join(lines))
+        except Exception as e:
+            await update.message.reply_text(f"Астро тест ошибка: {e}")
+        return
 
     # Keyword shortcut — не полагаемся на Claude для однозначных запросов
     _digest_kw = ["сводку", "сводка", "дайджест", "что сегодня", "покажи день",
