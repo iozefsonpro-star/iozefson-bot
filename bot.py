@@ -768,12 +768,15 @@ def get_astro_events(today_iso: str) -> list[dict]:
             logger.warning("Астро-календарь не найден. Доступные: %s", cal_names)
             return []
 
-        # timeMin = начало дня (не 08:00) чтобы поймать события стартующие ночью
+        # timeMin = начало дня, timeMax = начало следующего дня
+        # (использование конца дня 21:00 отсекает all-day events в Google Calendar API)
+        from datetime import timedelta
         day_start = ROME_TZ.localize(day.replace(hour=0, minute=0, second=0, microsecond=0))
+        day_next  = day_start + timedelta(days=1)
         result = service.events().list(
             calendarId=astro_cal["id"],
             timeMin=day_start.isoformat(),
-            timeMax=window_end.isoformat(),
+            timeMax=day_next.isoformat(),
             singleEvents=True,
             orderBy="startTime",
             maxResults=20,
