@@ -1169,6 +1169,34 @@ async def send_evening_digest(bot: Bot) -> None:
 # Обработчики сообщений
 # ---------------------------------------------------------------------------
 
+async def cmd_check_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        creds = _get_gcal_credentials()
+        if not creds:
+            await update.message.reply_text(
+                "❌ Нет подключения к Google Calendar.\n"
+                "Причина: переменная GOOGLE_TOKEN_JSON не задана или токен невалидный."
+            )
+            return
+        if not creds.valid:
+            await update.message.reply_text(
+                "❌ Токен Google Calendar недействителен и не может быть обновлён.\n"
+                "Нужно переавторизоваться через auth_google.py."
+            )
+            return
+        service = gcal_build("calendar", "v3", credentials=creds, cache_discovery=False)
+        calendars = service.calendarList().list().execute().get("items", [])
+        lines = [f"✅ Google Calendar подключён. Найдено календарей: {len(calendars)}\n"]
+        for cal in calendars:
+            name = cal.get("summary", "?")
+            cal_id = cal.get("id", "?")
+            primary = " (основной)" if cal.get("primary") else ""
+            lines.append(f"• {name}{primary}\n  {cal_id}")
+        await update.message.reply_text("\n".join(lines))
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка при проверке Calendar: {e}")
+
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "👋 Привет! Я Паола, твой ассистент.\n\n"
@@ -1515,6 +1543,7 @@ async def post_init(app: Application) -> None:
 def main() -> None:
     app = Application.builder().token(TELEGRAM_TOKEN).post_init(post_init).build()
     app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("check_calendar", cmd_check_calendar))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_message))
     logger.info("Bot started")
