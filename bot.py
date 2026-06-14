@@ -1320,9 +1320,12 @@ async def send_sunday_digest(bot: Bot) -> None:
             for i, wd in enumerate(weekdays_ru):
                 day     = next_mon + timedelta(days=i)
                 day_evs = cal_by_date.get(str(day), [])
-                ev_str  = (", ".join(_format_event_line(ev) for ev in day_evs)
-                           if day_evs else "свободно")
-                cal_lines.append(f"{wd} {day.strftime('%d.%m')} — {ev_str}")
+                if day_evs:
+                    cal_lines.append(f"{wd} {day.strftime('%d.%m')}:")
+                    for ev in day_evs:
+                        cal_lines.append(f"  {_format_event_line(ev)}")
+                else:
+                    cal_lines.append(f"{wd} {day.strftime('%d.%m')} — свободно")
 
             all_week_tasks = week_data["deadline_tasks"] + week_data["important_tasks"]
             queue_tasks    = week_data["queue_tasks"]
@@ -1412,9 +1415,12 @@ async def send_sunday_digest(bot: Bot) -> None:
                 if day < now.date():
                     continue
                 day_evs = cal_by_date.get(str(day), [])
-                ev_str  = (", ".join(_format_event_line(ev) for ev in day_evs)
-                           if day_evs else "свободно")
-                cal_lines.append(f"{wd} {day.strftime('%d.%m')} — {ev_str}")
+                if day_evs:
+                    cal_lines.append(f"{wd} {day.strftime('%d.%m')}:")
+                    for ev in day_evs:
+                        cal_lines.append(f"  {_format_event_line(ev)}")
+                else:
+                    cal_lines.append(f"{wd} {day.strftime('%d.%m')} — свободно")
 
             parts = [f"📅 Неделя в процессе ({week_range})\n"]
 
