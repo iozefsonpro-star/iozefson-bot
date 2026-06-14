@@ -103,6 +103,8 @@ NEWS_DIGEST_SYSTEM = (
     "- Тишина лучше воды: если в рубрике нет ничего стоящего — пропустить молча.\n"
     "- Trust-лист источников: Il Sole 24 Ore, Corriere (Il Punto), ANSA, ISTAT, Bankitalia, "
     "Confcommercio, Pambianco, BBC, официальные документы ЕС (Consilium), Reuters.\n"
+    "- Ссылки: в конце каждой рубрики добавь 1-2 прямых URL на источник в виде: "
+    "🔗 https://... (только реальные URL из результатов поиска, без markdown, просто текст).\n"
     "- Отвечай только plain text и эмодзи, без Markdown звёздочек."
 )
 
@@ -504,10 +506,10 @@ def notion_get_tomorrow_important() -> list[dict]:
     return tasks
 
 
-def notion_get_done_this_week() -> list[dict]:
-    """Tasks with status Done, last-edited Mon–Fri of current week (Rome TZ)."""
+def notion_get_done_this_week(week_start_override: date_cls | None = None) -> list[dict]:
+    """Tasks with status Done, last-edited Mon–Fri of given week (Rome TZ)."""
     now        = datetime.now(ROME_TZ)
-    week_start = now.date() - timedelta(days=now.weekday())  # Monday
+    week_start = week_start_override or (now.date() - timedelta(days=now.weekday()))
     week_end   = week_start + timedelta(days=4)              # Friday
 
     response = notion.databases.query(**{
@@ -535,10 +537,10 @@ def notion_get_done_this_week() -> list[dict]:
     return tasks
 
 
-def notion_get_undone_deadline_this_week() -> list[dict]:
-    """Tasks with deadline Mon–Fri of current week, status NOT Done."""
+def notion_get_undone_deadline_this_week(week_start_override: date_cls | None = None) -> list[dict]:
+    """Tasks with deadline Mon–Fri of given week, status NOT Done."""
     now        = datetime.now(ROME_TZ)
-    week_start = now.date() - timedelta(days=now.weekday())
+    week_start = week_start_override or (now.date() - timedelta(days=now.weekday()))
     week_end   = week_start + timedelta(days=4)
 
     response = notion.databases.query(**{
@@ -1206,20 +1208,35 @@ async def send_friday_digest(bot: Bot) -> None:
         now     = datetime.now(ROME_TZ)
         now_str = now.strftime("%d.%m.%Y")
 
-        week_start = now.date() - timedelta(days=now.weekday())
-        saturday   = week_start + timedelta(days=5)
-        sunday     = week_start + timedelta(days=6)
+        # Чт/Пт — текущая неделя; Сб/Вс/Пн-Ср — прошлая неделя (ретроспектива)
+        weekday     = now.weekday()
+        current_mon = now.date() - timedelta(days=weekday)
+        if weekday in (3, 4):
+            week_start   = current_mon
+            is_retro     = False
+        else:
+            week_start   = current_mon - timedelta(days=7)
+            is_retro     = True
 
-        done_week        = notion_get_done_this_week()
-        undone_this_week = notion_get_undone_deadline_this_week()
+        saturday = week_start + timedelta(days=5)
+        sunday   = week_start + timedelta(days=6)
+
+        done_week        = notion_get_done_this_week(week_start)
+        undone_this_week = notion_get_undone_deadline_this_week(week_start)
         done_today       = notion_get_done_today()
 
-        events      = get_calendar_events(days=3)
-        cal_by_date = events.get("by_date", {})
-        sat_events  = cal_by_date.get(str(saturday), [])
-        sun_events  = cal_by_date.get(str(sunday), [])
+        # Выходные: для ретроспективы они уже прошли — показываем только для текущей недели
+        sat_events: list = []
+        sun_events: list = []
+        if not is_retro:
+            events      = get_calendar_events(days=3)
+            cal_by_date = events.get("by_date", {})
+            sat_events  = cal_by_date.get(str(saturday), [])
+            sun_events  = cal_by_date.get(str(sunday), [])
 
-        parts = [f"📊 Итоги недели — {now_str} (Пт)\n"]
+        retro_label = "прошлой недели" if is_retro else "недели"
+        week_range  = f"{week_start.strftime('%d.%m')}–{(week_start + timedelta(days=4)).strftime('%d.%m')}"
+        parts = [f"📊 Итоги {retro_label} ({week_range})\n"]
 
         # 1. Сделано за неделю — grouped by Зона
         if done_week:
@@ -1250,17 +1267,18 @@ async def send_friday_digest(bot: Bot) -> None:
                 parts.append(f"• {zone}{t['title']}")
             parts.append("")
 
-        # 3. Выходные
-        parts.append("📅 Выходные:")
-        sat_fmt  = saturday.strftime("%d.%m")
-        sun_fmt  = sunday.strftime("%d.%m")
-        sat_line = (", ".join(_format_event_line(ev) for ev in sat_events)
-                    if sat_events else "свободно")
-        sun_line = (", ".join(_format_event_line(ev) for ev in sun_events)
-                    if sun_events else "свободно")
-        parts.append(f"Сб {sat_fmt} — {sat_line}")
-        parts.append(f"Вс {sun_fmt} — {sun_line}")
-        parts.append("")
+        # 3. Выходные (только для текущей недели — при ретроспективе уже прошли)
+        if not is_retro:
+            parts.append("📅 Выходные:")
+            sat_fmt  = saturday.strftime("%d.%m")
+            sun_fmt  = sunday.strftime("%d.%m")
+            sat_line = (", ".join(_format_event_line(ev) for ev in sat_events)
+                        if sat_events else "свободно")
+            sun_line = (", ".join(_format_event_line(ev) for ev in sun_events)
+                        if sun_events else "свободно")
+            parts.append(f"Сб {sat_fmt} — {sat_line}")
+            parts.append(f"Вс {sun_fmt} — {sun_line}")
+            parts.append("")
 
         # 4. Сделано сегодня
         if done_today:
@@ -1279,71 +1297,106 @@ async def send_friday_digest(bot: Bot) -> None:
 
 
 async def send_sunday_digest(bot: Bot) -> None:
-    """Воскресная сводка — старт следующей рабочей недели."""
+    """Воскресная сводка: Сб/Вс — старт следующей недели; Пн-Пт — итоги прошлой."""
     if not OWNER_CHAT_ID:
         return
     try:
         now     = datetime.now(ROME_TZ)
         now_str = now.strftime("%d.%m.%Y")
 
-        week_data = notion_get_next_week_tasks()
-        next_mon  = week_data["next_mon"]
-        next_fri  = week_data["next_fri"]
+        # Сб(5)/Вс(6) → старт новой недели вперёд; Пн-Пт → итоги прошлой недели
+        if now.weekday() in (5, 6):
+            week_data = notion_get_next_week_tasks()
+            next_mon  = week_data["next_mon"]
 
-        days_to_mon = (next_mon - now.date()).days
-        events      = get_calendar_events(days=days_to_mon + 5)
-        cal_by_date = events.get("by_date", {})
+            days_to_mon = (next_mon - now.date()).days
+            events      = get_calendar_events(days=days_to_mon + 5)
+            cal_by_date = events.get("by_date", {})
 
-        weekdays_ru = ["Пн", "Вт", "Ср", "Чт", "Пт"]
-        cal_lines   = []
-        for i, wd in enumerate(weekdays_ru):
-            day      = next_mon + timedelta(days=i)
-            day_fmt  = day.strftime("%d.%m")
-            day_evs  = cal_by_date.get(str(day), [])
-            ev_str   = (", ".join(_format_event_line(ev) for ev in day_evs)
-                        if day_evs else "свободно")
-            cal_lines.append(f"{wd} {day_fmt} — {ev_str}")
+            weekdays_ru = ["Пн", "Вт", "Ср", "Чт", "Пт"]
+            cal_lines   = []
+            for i, wd in enumerate(weekdays_ru):
+                day     = next_mon + timedelta(days=i)
+                day_evs = cal_by_date.get(str(day), [])
+                ev_str  = (", ".join(_format_event_line(ev) for ev in day_evs)
+                           if day_evs else "свободно")
+                cal_lines.append(f"{wd} {day.strftime('%d.%m')} — {ev_str}")
 
-        all_week_tasks = week_data["deadline_tasks"] + week_data["important_tasks"]
-        queue_tasks    = week_data["queue_tasks"]
+            all_week_tasks = week_data["deadline_tasks"] + week_data["important_tasks"]
+            queue_tasks    = week_data["queue_tasks"]
 
-        zone_count: dict[str, int] = {}
-        for t in all_week_tasks:
-            z = t.get("zone") or "📌 Без зоны"
-            zone_count[z] = zone_count.get(z, 0) + 1
-
-        parts = [f"📅 Старт недели — {now_str} (Вс)\n"]
-        parts.append("Впереди 5 рабочих дней\n")
-
-        parts.append("🗓 Календарь недели:")
-        parts.extend(cal_lines)
-        parts.append("")
-
-        if all_week_tasks:
-            parts.append("🎯 Задачи на эту неделю:")
+            zone_count: dict[str, int] = {}
             for t in all_week_tasks:
-                zone = f"[{t['zone']}] " if t.get("zone") else ""
-                parts.append(f"• {zone}{t['title']}")
+                z = t.get("zone") or "📌 Без зоны"
+                zone_count[z] = zone_count.get(z, 0) + 1
+
+            parts = [f"📅 Старт недели — {now_str}\n", "Впереди 5 рабочих дней\n"]
+            parts.append("🗓 Календарь недели:")
+            parts.extend(cal_lines)
             parts.append("")
 
-        if queue_tasks:
-            parts.append("🔜 Висит в очереди:")
-            for t in queue_tasks:
-                zone = f"[{t['zone']}] " if t.get("zone") else ""
-                parts.append(f"• {zone}{t['title']}")
-            parts.append("")
+            if all_week_tasks:
+                parts.append("🎯 Задачи на эту неделю:")
+                for t in all_week_tasks:
+                    zone = f"[{t['zone']}] " if t.get("zone") else ""
+                    parts.append(f"• {zone}{t['title']}")
+                parts.append("")
 
-        if zone_count:
-            top_zone = max(zone_count, key=lambda z: zone_count[z])
-            focus = clean_markdown(ask_claude(
-                SYSTEM_PROMPT,
-                f"На следующей неделе больше всего задач в зоне '{top_zone}'. "
-                "Напиши одно предложение про фокус недели. Только plain text.",
-            ))
+            if queue_tasks:
+                parts.append("🔜 Висит в очереди:")
+                for t in queue_tasks:
+                    zone = f"[{t['zone']}] " if t.get("zone") else ""
+                    parts.append(f"• {zone}{t['title']}")
+                parts.append("")
+
+            if zone_count:
+                top_zone = max(zone_count, key=lambda z: zone_count[z])
+                focus = clean_markdown(ask_claude(
+                    SYSTEM_PROMPT,
+                    f"На следующей неделе больше всего задач в зоне '{top_zone}'. "
+                    "Напиши одно предложение про фокус недели. Только plain text.",
+                ))
+            else:
+                focus = "Хорошая неделя для планирования."
+            parts.append("💭 Фокус недели:")
+            parts.append(focus)
+
         else:
-            focus = "Хорошая неделя для планирования."
-        parts.append("💭 Фокус недели:")
-        parts.append(focus)
+            # Пн-Пт: ретроспектива прошлой недели (как пятничная сводка)
+            current_mon = now.date() - timedelta(days=now.weekday())
+            week_start  = current_mon - timedelta(days=7)
+            week_range  = f"{week_start.strftime('%d.%m')}–{(week_start + timedelta(days=4)).strftime('%d.%m')}"
+
+            done_week        = notion_get_done_this_week(week_start)
+            undone_this_week = notion_get_undone_deadline_this_week(week_start)
+
+            parts = [f"📊 Итоги прошлой недели ({week_range})\n"]
+
+            if done_week:
+                parts.append("✅ Сделано за неделю:")
+                by_zone: dict[str, list[str]] = {}
+                for t in done_week:
+                    zone = t.get("zone") or "📌 Без зоны"
+                    by_zone.setdefault(zone, []).append(t["title"])
+                for zone, titles in by_zone.items():
+                    parts.append(f"[{zone}]: {', '.join(titles)}")
+                top_zone = max(by_zone, key=lambda z: len(by_zone[z]))
+                focus = clean_markdown(ask_claude(
+                    SYSTEM_PROMPT,
+                    f"На прошлой неделе больше всего задач закрыто в зоне '{top_zone}'. "
+                    "Напиши одно предложение: 'На той неделе фокус был на [зона]'. Только plain text.",
+                ))
+                parts.append(f"\n{focus}")
+            else:
+                parts.append("✅ Сделано за неделю: —")
+            parts.append("")
+
+            if undone_this_week:
+                parts.append("⏩ Не закрыто в срок:")
+                for t in undone_this_week:
+                    zone = f"[{t['zone']}] " if t.get("zone") else ""
+                    parts.append(f"• {zone}{t['title']}")
+                parts.append("")
 
         await bot.send_message(chat_id=int(OWNER_CHAT_ID), text="\n".join(parts).strip())
         logger.info("Sunday digest sent")
