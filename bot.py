@@ -12,9 +12,9 @@ except ImportError:
 
 import json
 import anthropic
-from telegram import Update, Document, Bot
+from telegram import Update, Document, Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    Application, CommandHandler, MessageHandler,
+    Application, CommandHandler, MessageHandler, CallbackQueryHandler,
     filters, ContextTypes
 )
 from notion_client import Client as NotionClient
@@ -236,6 +236,72 @@ def notion_save_news_digest(date_iso: str, text: str) -> str | None:
     except Exception as e:
         logger.error("notion_save_news_digest error: %s", e)
         return None
+
+
+def notion_get_news_by_date(date_iso: str) -> dict | None:
+    """Fetch news archive entry by exact date."""
+    if not NOTION_NEWS_ARCHIVE_DB_ID:
+        return None
+    try:
+        resp = notion.databases.query(
+            database_id=NOTION_NEWS_ARCHIVE_DB_ID,
+            filter={"property": "Дата выпуска", "date": {"equals": date_iso}},
+            page_size=1,
+        )
+        if not resp.get("results"):
+            return None
+        page = resp["results"][0]
+        date_prop = page["properties"].get("Дата выпуска", {}).get("date")
+        date_str  = date_prop["start"] if date_prop else None
+        blocks    = notion.blocks.children.list(block_id=page["id"])
+        body_parts = []
+        for block in blocks.get("results", []):
+            btype = block.get("type")
+            if btype in ("paragraph", "bulleted_list_item", "numbered_list_item",
+                         "heading_1", "heading_2", "heading_3"):
+                rich_text = block.get(btype, {}).get("rich_text", [])
+                text = "".join(rt.get("text", {}).get("content", "") for rt in rich_text)
+                if text:
+                    body_parts.append(text)
+        return {"id": page["id"], "date": date_str, "body": "\n".join(body_parts)}
+    except Exception as e:
+        logger.error("notion_get_news_by_date error: %s", e)
+        return None
+
+
+def notion_get_zone_stats() -> dict:
+    """Returns active task counts by zone and done task counts by zone (last 100)."""
+    result: dict = {"active": {}, "done": {}}
+    if not NOTION_TODOLIST_DB_ID:
+        return result
+    try:
+        resp_active = notion.databases.query(
+            database_id=NOTION_TODOLIST_DB_ID,
+            filter={"or": [
+                {"property": "Статус", "select": {"equals": "To do"}},
+                {"property": "Статус", "select": {"equals": "In progress"}},
+                {"property": "Статус", "select": {"equals": "Sospeso"}},
+            ]},
+            page_size=100,
+        )
+        for page in resp_active.get("results", []):
+            t = _parse_task_props(page)
+            zone = t.get("zone") or "Без зоны"
+            result["active"][zone] = result["active"].get(zone, 0) + 1
+
+        resp_done = notion.databases.query(
+            database_id=NOTION_TODOLIST_DB_ID,
+            filter={"property": "Статус", "select": {"equals": "Done"}},
+            sorts=[{"timestamp": "last_edited_time", "direction": "descending"}],
+            page_size=100,
+        )
+        for page in resp_done.get("results", []):
+            t = _parse_task_props(page)
+            zone = t.get("zone") or "Без зоны"
+            result["done"][zone] = result["done"].get(zone, 0) + 1
+    except Exception as e:
+        logger.error("notion_get_zone_stats error: %s", e)
+    return result
 
 
 def notion_create_content_idea(topic: str, hook: str) -> bool:
@@ -1396,8 +1462,61 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    keyboard = [
+        [
+            InlineKeyboardButton("📋 Утренняя",   callback_data="test_morning"),
+            InlineKeyboardButton("🌙 Вечерняя",   callback_data="test_evening"),
+        ],
+        [
+            InlineKeyboardButton("📅 Пятничная",  callback_data="test_friday"),
+            InlineKeyboardButton("🗓 Воскресная", callback_data="test_sunday"),
+        ],
+        [
+            InlineKeyboardButton("📰 Новости сейчас", callback_data="test_news"),
+        ],
+    ]
+    await update.message.reply_text(
+        "🎛 Пульт управления Паолы\nВыбери что запустить:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    data  = query.data
+
+    labels = {
+        "test_morning": "утреннюю сводку",
+        "test_evening": "вечернюю сводку",
+        "test_friday":  "пятничную сводку",
+        "test_sunday":  "воскресную сводку",
+        "test_news":    "новостной дайджест (~30 сек)",
+    }
+    await query.edit_message_text(f"⏳ Генерирую {labels.get(data, data)}...")
+    try:
+        if data == "test_morning":
+            await send_morning_digest(context.bot)
+        elif data == "test_evening":
+            await send_evening_digest(context.bot, context.application)
+        elif data == "test_friday":
+            await send_friday_digest(context.bot)
+        elif data == "test_sunday":
+            await send_sunday_digest(context.bot)
+        elif data == "test_news":
+            await prepare_news_digest(context.bot)
+            await send_news_digest(context.bot)
+        await query.edit_message_text(f"✅ {labels.get(data, data).capitalize()} отправлена")
+    except Exception as e:
+        await query.edit_message_text(f"❌ Ошибка: {e}")
+
+
 _DIGEST_KW = ["сводку", "сводка", "дайджест", "что сегодня", "покажи день",
               "план на день", "что у меня сегодня", "что у меня на сегодня"]
+
+_NEWS_KW = ["новости", "новостной дайджест", "покажи новости", "пришли новости",
+            "что в новостях", "дайджест новостей"]
 
 
 def _classify_intent(message: str, today_iso: str) -> str:
@@ -1415,6 +1534,12 @@ def _classify_intent(message: str, today_iso: str) -> str:
         "TAKE_POST — взять повод для поста из новостного дайджеста в работу. "
         "Примеры: 'возьми пост в работу', 'запиши идею поста', 'сохрани пост', "
         "'добавь в контент', 'возьми в работу'\n"
+        "SHOW_NEWS — показать сегодняшние новости. "
+        "Примеры: 'новости', 'покажи новости', 'что в новостях', 'пришли новости'\n"
+        "NEWS_ARCHIVE: <дата или период> — новости из архива за конкретную дату/период. "
+        "Примеры: 'новости за вчера', 'новости за пятницу', 'архив новостей'\n"
+        "SHOW_STATS — статистика задач по зонам. "
+        "Примеры: 'статистика', 'статистика по зонам', 'итоги по зонам', 'сколько задач'\n"
         "OTHER — всё остальное"
     )
     try:
@@ -1636,6 +1761,80 @@ async def _handle_take_post(update: Update, message: str) -> None:
         await update.message.reply_text(f"Ошибка: {e}")
 
 
+async def _handle_show_news(update: Update) -> None:
+    today_iso = datetime.now(ROME_TZ).strftime("%Y-%m-%d")
+    if _news_digest_cache.get("date") == today_iso and _news_digest_cache.get("text"):
+        body = _news_digest_cache["text"]
+        date_display = datetime.now(ROME_TZ).strftime("%d.%m.%Y")
+    else:
+        digest = notion_get_latest_news_digest()
+        if not digest or not digest.get("body"):
+            await update.message.reply_text("❓ Новостей пока нет. Следующий дайджест будет в 08:30.")
+            return
+        body         = digest["body"]
+        date_display = (datetime.strptime(digest["date"], "%Y-%m-%d").strftime("%d.%m.%Y")
+                        if digest.get("date") else "?")
+    text = f"📰 Новостной дайджест — {date_display}\n\n{body}"
+    await update.message.reply_text(text[:4096] if len(text) > 4096 else text)
+
+
+async def _handle_news_archive(update: Update, message: str) -> None:
+    today_iso = datetime.now(ROME_TZ).strftime("%Y-%m-%d")
+    try:
+        date_str = ask_claude(
+            f"Сегодня {today_iso}. Из сообщения извлеки дату и верни ТОЛЬКО YYYY-MM-DD. "
+            "Если нет конкретной даты — верни LATEST.",
+            message, model=MODEL_SMART,
+        ).strip()
+    except Exception:
+        date_str = "LATEST"
+
+    digest = (notion_get_latest_news_digest() if date_str == "LATEST"
+              else notion_get_news_by_date(date_str))
+
+    if not digest or not digest.get("body"):
+        await update.message.reply_text("❓ Новостей за эту дату не нашла в архиве.")
+        return
+
+    date_display = (datetime.strptime(digest["date"], "%Y-%m-%d").strftime("%d.%m.%Y")
+                    if digest.get("date") else "?")
+    text = f"📰 Новостной дайджест — {date_display}\n\n{digest['body']}"
+    await update.message.reply_text(text[:4096] if len(text) > 4096 else text)
+
+
+async def _handle_show_stats(update: Update) -> None:
+    stats  = notion_get_zone_stats()
+    active = stats["active"]
+    done   = stats["done"]
+
+    all_zones = sorted(
+        set(list(active.keys()) + list(done.keys())),
+        key=lambda z: -(active.get(z, 0) + done.get(z, 0)),
+    )
+    if not all_zones:
+        await update.message.reply_text("Задач пока нет.")
+        return
+
+    total_active = sum(active.values())
+    total_done   = sum(done.values())
+
+    lines = [
+        f"📊 Статистика по зонам",
+        f"В работе: {total_active}  |  Выполнено (всего): {total_done}\n",
+    ]
+    for zone in all_zones:
+        a = active.get(zone, 0)
+        d = done.get(zone, 0)
+        parts = []
+        if a:
+            parts.append(f"{a} активных")
+        if d:
+            parts.append(f"{d} выполнено")
+        lines.append(f"{zone}: {', '.join(parts)}")
+
+    await update.message.reply_text("\n".join(lines))
+
+
 async def _handle_other(update: Update, message: str) -> None:
     try:
         tasks    = notion_get_tasks()
@@ -1709,6 +1908,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await _handle_show_digest(update)
         return
 
+    if any(kw in msg_lower for kw in _NEWS_KW) and not pending_tasks:
+        await _handle_show_news(update)
+        return
+
     intent = _classify_intent(message, today_iso)
     logger.info("Intent: %s", intent)
 
@@ -1726,6 +1929,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await _handle_create_task(update, message, today_iso)
     elif intent.startswith("TAKE_POST"):
         await _handle_take_post(update, message)
+    elif intent.startswith("SHOW_NEWS"):
+        await _handle_show_news(update)
+    elif intent.startswith("NEWS_ARCHIVE"):
+        await _handle_news_archive(update, message)
+    elif intent.startswith("SHOW_STATS"):
+        await _handle_show_stats(update)
     else:
         await _handle_other(update, message)
 
@@ -1794,6 +2003,8 @@ def main() -> None:
     app = Application.builder().token(TELEGRAM_TOKEN).post_init(post_init).build()
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("check_calendar", cmd_check_calendar))
+    app.add_handler(CommandHandler("test", cmd_test))
+    app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_message))
     logger.info("Bot started")
