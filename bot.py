@@ -1583,6 +1583,10 @@ async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         [
             InlineKeyboardButton("📰 Новости сейчас", callback_data="test_news"),
         ],
+        [
+            InlineKeyboardButton("🗄 Архив новостей", callback_data="test_archive"),
+            InlineKeyboardButton("📊 Статистика зон", callback_data="test_stats"),
+        ],
     ]
     await update.message.reply_text(
         "🎛 Пульт управления Паолы\nВыбери что запустить:",
@@ -1601,6 +1605,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         "test_friday":  "пятничную сводку",
         "test_sunday":  "воскресную сводку",
         "test_news":    "новостной дайджест (~30 сек)",
+        "test_archive": "архив новостей",
+        "test_stats":   "статистику по зонам",
     }
     await query.edit_message_text(f"⏳ Генерирую {labels.get(data, data)}...")
     try:
@@ -1615,6 +1621,45 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         elif data == "test_news":
             await prepare_news_digest(context.bot)
             await send_news_digest(context.bot)
+        elif data == "test_archive":
+            now       = datetime.now(ROME_TZ)
+            today_iso = now.strftime("%Y-%m-%d")
+            digest    = notion_get_news_by_date(today_iso)
+            if not digest and NOTION_NEWS_ARCHIVE_DB_ID:
+                resp = notion.databases.query(
+                    database_id=NOTION_NEWS_ARCHIVE_DB_ID,
+                    sorts=[{"property": "Дата выпуска", "direction": "descending"}],
+                    page_size=1,
+                )
+                if resp.get("results"):
+                    p = resp["results"][0]
+                    date_prop = p["properties"].get("Дата выпуска", {}).get("date")
+                    d_iso = date_prop["start"] if date_prop else None
+                    digest = notion_get_news_by_date(d_iso) if d_iso else None
+            if digest and digest.get("body"):
+                date_label = digest.get("date", today_iso)
+                text = f"🗄 Архив новостей ({date_label}):\n\n{digest['body']}"
+            else:
+                text = "❓ Новостей в архиве пока нет."
+            await context.bot.send_message(chat_id=int(OWNER_CHAT_ID), text=text)
+        elif data == "test_stats":
+            stats  = notion_get_zone_stats()
+            active = stats["active"]
+            done   = stats["done"]
+            all_zones = sorted(
+                set(active) | set(done),
+                key=lambda z: -(active.get(z, 0) + done.get(z, 0)),
+            )
+            if not all_zones:
+                text = "📊 Статистика по зонам: данных нет."
+            else:
+                lines = ["📊 Статистика по зонам\n"]
+                for zone in all_zones:
+                    a = active.get(zone, 0)
+                    d = done.get(zone, 0)
+                    lines.append(f"{zone}: {a} активных / {d} закрытых")
+                text = "\n".join(lines)
+            await context.bot.send_message(chat_id=int(OWNER_CHAT_ID), text=text)
         await query.edit_message_text(f"✅ {labels.get(data, data).capitalize()} отправлена")
     except Exception as e:
         await query.edit_message_text(f"❌ Ошибка: {e}")
