@@ -1275,6 +1275,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if msg_lower.strip() in ("астро тест", "/astro"):
         try:
             today_iso_dbg = datetime.now(ROME_TZ).strftime("%Y-%m-%d")
+            # показать все календари для диагностики имени
+            creds_dbg = _get_gcal_credentials()
+            if creds_dbg:
+                svc_dbg    = gcal_build("calendar", "v3", credentials=creds_dbg, cache_discovery=False)
+                all_cals   = svc_dbg.calendarList().list().execute().get("items", [])
+                cal_names  = [c.get("summary", "?") for c in all_cals]
+                await update.message.reply_text("Календари в аккаунте:\n" + "\n".join(f"• {n}" for n in cal_names))
+
             dbg_events    = get_astro_events(today_iso_dbg)
             if not dbg_events:
                 await update.message.reply_text("Астро: событий не найдено (get_astro_events вернул [])")
