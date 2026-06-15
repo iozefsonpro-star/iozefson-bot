@@ -87,25 +87,38 @@ _news_digest_cache: dict = {}  # {"date": "YYYY-MM-DD", "text": "..."}
 NEWS_DIGEST_SYSTEM = (
     "Ты готовишь ежедневный новостной дайджест для Юлии Иозефсон, "
     "независимого бизнес-консультанта (Италия, Дезио).\n\n"
-    "Язык ответа: русский. Тон: партнёрский, связный, без рубленых тезисов. "
-    "Формат: телефон-first, один экран.\n\n"
-    "Структура — шесть рубрик:\n"
+    "Язык ответа: русский. Тон: партнёрский, связный, без рубленых тезисов.\n\n"
+    "Шесть рубрик:\n"
     "🇮🇹 Италия и бизнес-климат — макро, экономика, Ломбардия/Милан через призму бизнеса и PMI\n"
     "🏢 Индустрии клиентов — страхование, финансы, made-in-Italy, люкс, hospitality\n"
     "🤖 AI и цифровая трансформация — практическое применение, не хайп\n"
     "⚖️ Регуляторика — AI Act, налоги, партита IVA, трудовое право\n"
     "🌍 Что касается меня лично — Россия (санкции, банки, поездки), Израиль (фоновый радар)\n"
-    "💡 Повод для поста — один угол для LinkedIn + готовая первая строка-зацепка\n\n"
+    "💡 Повод для поста — 1–3 идеи для LinkedIn с первой строкой-зацепкой\n\n"
     "Правила:\n"
     "- Энергофильтр: каждый пункт должен задевать бизнес, клиентов, рынок или лично Юлию. "
     "«Просто новость» выкидываем.\n"
-    "- Свежесть: последние 24–48 часов. Не повторять то, что уже есть в вчерашнем выпуске.\n"
+    "- Свежесть: последние 24–48 часов. Без повторения вчерашних тем без нового развития.\n"
     "- Тишина лучше воды: если в рубрике нет ничего стоящего — пропустить молча.\n"
     "- Trust-лист источников: Il Sole 24 Ore, Corriere (Il Punto), ANSA, ISTAT, Bankitalia, "
     "Confcommercio, Pambianco, BBC, официальные документы ЕС (Consilium), Reuters.\n"
-    "- Ссылки: в конце каждой рубрики добавь 1-2 прямых URL на источник в виде: "
-    "🔗 https://... (только реальные URL из результатов поиска, без markdown, просто текст).\n"
-    "- Отвечай только plain text и эмодзи, без Markdown звёздочек."
+    "- Ссылки: в конце каждой рубрики 1-2 прямых URL: 🔗 https://... (только реальные).\n"
+    "- Отвечай только plain text и эмодзи, без Markdown звёздочек.\n\n"
+    "ОБЯЗАТЕЛЬНЫЙ ФОРМАТ ВЫВОДА — строго три секции с тегами (все три обязательны):\n\n"
+    "[FULL_DIGEST]\n"
+    "<полный дайджест по всем 6 рубрикам со ссылками>\n"
+    "[/FULL_DIGEST]\n\n"
+    "[TEASER]\n"
+    "<одна строка на каждую рубрику с новостью: {эмодзи рубрики} {краткий заголовок}>\n"
+    "<рубрики без новостей — не включать>\n"
+    "[/TEASER]\n\n"
+    "[IDEAS]\n"
+    "<1–3 блока, по одному на каждую идею поста:>\n"
+    "ТЕМА: <краткая тема 3–7 слов>\n"
+    "ЗАЦЕПКА: <готовая первая строка поста>\n"
+    "УГОЛ: <1–2 предложения: какой угол взять>\n"
+    "<пустая строка между идеями>\n"
+    "[/IDEAS]"
 )
 
 # ---------------------------------------------------------------------------
@@ -212,32 +225,72 @@ def notion_get_latest_news_digest() -> dict | None:
         return None
 
 
-def notion_save_news_digest(date_iso: str, text: str) -> str | None:
-    """Create a new entry in Архив новостей. Returns page ID."""
+_MONTHS_GEN = {
+    1: "января", 2: "февраля", 3: "марта", 4: "апреля",
+    5: "мая", 6: "июня", 7: "июля", 8: "августа",
+    9: "сентября", 10: "октября", 11: "ноября", 12: "декабря",
+}
+
+
+def _format_date_ru(dt: datetime) -> str:
+    return f"{dt.day} {_MONTHS_GEN[dt.month]}"
+
+
+def _digest_title_ru(date_iso: str) -> str:
+    d = datetime.strptime(date_iso, "%Y-%m-%d")
+    return f"Дайджест · {d.day} {_MONTHS_GEN[d.month]} {d.year}"
+
+
+def _text_to_notion_blocks(text: str) -> list[dict]:
+    """Split text into Notion paragraph blocks (≤1900 chars each)."""
+    chunks = []
+    for line in text.split("\n"):
+        while len(line) > 1900:
+            chunks.append(line[:1900])
+            line = line[1900:]
+        chunks.append(line)
+    return [
+        {
+            "object": "block",
+            "type": "paragraph",
+            "paragraph": {"rich_text": [{"type": "text", "text": {"content": chunk}}]},
+        }
+        for chunk in chunks
+    ]
+
+
+def notion_save_news_digest(date_iso: str, text: str) -> tuple[str, str] | tuple[None, None]:
+    """Create a new entry in Архив новостей. Returns (page_id, page_url) or (None, None)."""
     if not NOTION_NEWS_ARCHIVE_DB_ID:
-        return None
+        logger.error("notion_save_news_digest: NOTION_NEWS_ARCHIVE_DB_ID not set")
+        return None, None
     try:
-        date_fmt = datetime.strptime(date_iso, "%Y-%m-%d").strftime("%d.%m.%Y")
-        children = [
-            {
-                "object": "block",
-                "type": "paragraph",
-                "paragraph": {"rich_text": [{"type": "text", "text": {"content": line}}]},
-            }
-            for line in text.split("\n")
-        ]
-        page = notion.pages.create(
+        title      = _digest_title_ru(date_iso)
+        all_blocks = _text_to_notion_blocks(text)
+
+        # Notion allows max 100 blocks per request; append the rest in batches
+        first_batch  = all_blocks[:100]
+        rest_batches = [all_blocks[i:i + 100] for i in range(100, len(all_blocks), 100)]
+
+        page    = notion.pages.create(
             parent={"database_id": NOTION_NEWS_ARCHIVE_DB_ID},
             properties={
-                "Выпуск":       {"title": [{"text": {"content": date_fmt}}]},
+                "Выпуск":       {"title": [{"text": {"content": title}}]},
                 "Дата выпуска": {"date": {"start": date_iso}},
             },
-            children=children,
+            children=first_batch,
         )
-        return page["id"]
+        page_id  = page["id"]
+        page_url = page.get("url", f"https://www.notion.so/{page_id.replace('-', '')}")
+
+        for batch in rest_batches:
+            notion.blocks.children.append(block_id=page_id, children=batch)
+
+        logger.info("notion_save_news_digest: saved '%s', url=%s", title, page_url)
+        return page_id, page_url
     except Exception as e:
-        logger.error("notion_save_news_digest error: %s", e)
-        return None
+        logger.error("notion_save_news_digest FAILED: %s", e)
+        return None, None
 
 
 def notion_get_news_by_date(date_iso: str) -> dict | None:
@@ -325,6 +378,120 @@ def notion_create_content_idea(topic: str, hook: str) -> bool:
     except Exception as e:
         logger.error("notion_create_content_idea error: %s", e)
         return False
+
+
+def notion_create_content_ideas(ideas: list[dict], today_iso: str) -> int:
+    """Create 1–3 idea entries in ✍️ Контент. Returns count of successfully created records."""
+    if not NOTION_CONTENT_DB_ID:
+        logger.error("notion_create_content_ideas: NOTION_CONTENT_DB_ID not set")
+        return 0
+    date_fmt = datetime.strptime(today_iso, "%Y-%m-%d").strftime("%d.%m.%Y")
+    count = 0
+    for idea in ideas:
+        topic = idea.get("topic", "").strip()
+        if not topic:
+            continue
+        hook    = idea.get("hook", "").strip()
+        angle   = idea.get("angle", "").strip()
+        comment = "\n".join(filter(None, [hook, angle, f"[Выпуск: {date_fmt}]"]))
+        try:
+            notion.pages.create(
+                parent={"database_id": NOTION_CONTENT_DB_ID},
+                properties={
+                    "Тема":        {"title": [{"text": {"content": topic}}]},
+                    "Платформа":   {"select": {"name": "LinkedIn"}},
+                    "Формат":      {"select": {"name": "Пост"}},
+                    "Статус":      {"select": {"name": "💡 Идея"}},
+                    "Вердикт":     {"select": {"name": "🆕 Новое"}},
+                    "Из новостей": {"checkbox": True},
+                    "Комментарий": {"rich_text": [{"text": {"content": comment[:2000]}}]},
+                },
+            )
+            count += 1
+            logger.info("notion_create_content_ideas: created '%s'", topic)
+        except Exception as e:
+            logger.error("notion_create_content_ideas: failed for '%s': %s", topic, e)
+    return count
+
+
+def notion_get_content_feedback() -> str:
+    """Block E: read past reviewed news ideas for the learning-loop prompt context."""
+    if not NOTION_CONTENT_DB_ID:
+        return ""
+    try:
+        resp = notion.databases.query(
+            database_id=NOTION_CONTENT_DB_ID,
+            filter={"property": "Из новостей", "checkbox": {"equals": True}},
+            sorts=[{"timestamp": "created_time", "direction": "descending"}],
+            page_size=50,
+        )
+        entries = []
+        for page in resp.get("results", []):
+            props   = page.get("properties", {})
+            topic   = "".join(t.get("plain_text", "") for t in props.get("Тема", {}).get("title", []))
+            verdict = (props.get("Вердикт", {}).get("select") or {}).get("name", "")
+            if not topic or verdict in ("🆕 Новое", ""):
+                continue  # skip un-reviewed ideas
+            comment_rich = props.get("Комментарий", {}).get("rich_text", [])
+            comment      = "".join(c.get("plain_text", "") for c in comment_rich)
+            entries.append(
+                f"«{topic}» → {verdict}"
+                + (f" / {comment[:150]}" if comment else "")
+            )
+        if not entries:
+            return ""
+        return (
+            "История оценок Юлии (прошлые идеи из новостей):\n"
+            + "\n".join(entries[:30])
+            + "\n\nПри генерации идей: предлагай в стиле «👍 Беру», "
+              "избегай паттернов «👎 Не подошло» / «⚠️ Слишком триггерно» / «🕓 Не актуально»."
+        )
+    except Exception as e:
+        logger.error("notion_get_content_feedback error: %s", e)
+        return ""
+
+
+def _parse_digest_output(text: str) -> dict:
+    """Parse structured digest output into full_digest, teaser_lines, ideas sections."""
+    def _extract(tag: str) -> str:
+        open_tag  = f"[{tag}]"
+        close_tag = f"[/{tag}]"
+        start = text.find(open_tag)
+        end   = text.find(close_tag)
+        if start == -1 or end == -1:
+            return ""
+        return text[start + len(open_tag):end].strip()
+
+    full_digest = _extract("FULL_DIGEST")
+    teaser_raw  = _extract("TEASER")
+    ideas_raw   = _extract("IDEAS")
+
+    if not full_digest:
+        full_digest = text.strip()
+
+    teaser_lines = [ln.strip() for ln in teaser_raw.split("\n") if ln.strip()] if teaser_raw else []
+
+    ideas: list[dict] = []
+    if ideas_raw:
+        current: dict = {}
+        for line in ideas_raw.split("\n"):
+            line = line.strip()
+            if line.startswith("ТЕМА:"):
+                if current.get("topic"):
+                    ideas.append(current)
+                current = {"topic": line[5:].strip(), "hook": "", "angle": ""}
+            elif line.startswith("ЗАЦЕПКА:"):
+                current["hook"] = line[8:].strip()
+            elif line.startswith("УГОЛ:"):
+                current["angle"] = line[5:].strip()
+        if current.get("topic"):
+            ideas.append(current)
+
+    return {
+        "full_digest": full_digest,
+        "teaser_lines": teaser_lines,
+        "ideas": ideas[:3],
+    }
 
 
 def _parse_task_props(page: dict) -> dict:
@@ -1475,60 +1642,114 @@ async def send_evening_digest(bot: Bot, app=None) -> None:
 
 
 async def prepare_news_digest(bot: Bot) -> None:
-    """08:25 — call Claude with web search, save result to Архив новостей."""
+    """08:05 — Notion-first news digest: research → archive page → content ideas → Telegram teaser."""
     if not OWNER_CHAT_ID:
         return
-    try:
-        now       = datetime.now(ROME_TZ)
-        today_iso = now.strftime("%Y-%m-%d")
 
-        last_digest      = notion_get_latest_news_digest()
-        yesterday_block  = ""
-        if last_digest and last_digest.get("body"):
-            yesterday_block = f"\n\nВчерашний выпуск (не повторять):\n{last_digest['body'][:2000]}"
+    now       = datetime.now(ROME_TZ)
+    today_iso = now.strftime("%Y-%m-%d")
 
-        user_msg = (
-            f"Подготовь дайджест новостей за последние 24–48 часов. "
-            f"Сегодня {now.strftime('%d.%m.%Y')}.{yesterday_block}"
+    # Block E: learning loop — past verdicts for the prompt
+    feedback_str = notion_get_content_feedback()
+
+    # Dedup: yesterday's digest body
+    last_digest     = notion_get_latest_news_digest()
+    yesterday_block = ""
+    if last_digest and last_digest.get("body"):
+        yesterday_block = (
+            f"\n\nВчерашний выпуск (не повторять темы без нового развития):\n"
+            f"{last_digest['body'][:2000]}"
         )
-        digest_text = ask_claude_with_search(NEWS_DIGEST_SYSTEM, user_msg, max_tokens=4096)
 
-        if digest_text.strip():
-            _news_digest_cache["date"] = today_iso
-            _news_digest_cache["text"] = digest_text
-            notion_save_news_digest(today_iso, digest_text)
-            logger.info("News digest prepared and saved for %s", today_iso)
-        else:
+    user_msg = (
+        f"Подготовь дайджест новостей за последние 24–48 часов. "
+        f"Сегодня {now.strftime('%d.%m.%Y')}."
+        f"{yesterday_block}"
+        + (f"\n\n{feedback_str}" if feedback_str else "")
+    )
+
+    digest_text  = ""
+    teaser_lines: list[str] = []
+    ideas: list[dict]       = []
+    archive_ok   = False
+    archive_url  = None
+    ideas_ok     = True
+    ideas_count  = 0
+
+    # Research via Claude + web search
+    try:
+        raw = ask_claude_with_search(NEWS_DIGEST_SYSTEM, user_msg, max_tokens=4096)
+        if not raw.strip():
             logger.warning("prepare_news_digest: empty response from Claude")
+            await bot.send_message(
+                chat_id=int(OWNER_CHAT_ID),
+                text="⚠️ Дайджест не получен: Claude вернул пустой ответ.",
+            )
+            return
+        parsed       = _parse_digest_output(raw)
+        digest_text  = parsed["full_digest"]
+        teaser_lines = parsed["teaser_lines"]
+        ideas        = parsed["ideas"]
+        _news_digest_cache["date"] = today_iso
+        _news_digest_cache["text"] = digest_text
     except Exception as e:
-        logger.error("prepare_news_digest error: %s", e)
+        logger.error("prepare_news_digest: Claude error: %s", e)
+        await bot.send_message(
+            chat_id=int(OWNER_CHAT_ID),
+            text=f"⚠️ Дайджест не получен: ошибка Claude — {e}",
+        )
+        return
+
+    # Block A: save full digest to Архив новостей (page is created BEFORE Telegram message)
+    try:
+        page_id, archive_url = notion_save_news_digest(today_iso, digest_text)
+        archive_ok = page_id is not None
+    except Exception as e:
+        logger.error("prepare_news_digest: archive save failed: %s", e)
+        archive_ok  = False
+        archive_url = None
+
+    # Block D: create content ideas in ✍️ Контент
+    if ideas:
+        try:
+            ideas_count = notion_create_content_ideas(ideas, today_iso)
+            ideas_ok    = True
+        except Exception as e:
+            logger.error("prepare_news_digest: content ideas failed: %s", e)
+            ideas_ok    = False
+            ideas_count = 0
+
+    # Block C: build and send Telegram teaser
+    tg_lines = [f"📰 Дайджест · {_format_date_ru(now)}"]
+
+    if teaser_lines:
+        tg_lines.extend(teaser_lines)
+    else:
+        tg_lines.append("(тизер недоступен)")
+
+    if ideas and ideas[0].get("topic"):
+        tg_lines.append(f"💡 Пост: {ideas[0]['topic']}")
+
+    tg_lines.append("")
+
+    if archive_ok and archive_url:
+        tg_lines.append(f"📖 Весь выпуск со ссылками → {archive_url}")
+    else:
+        tg_lines.append("⚠️ архив не сохранён")
+
+    if ideas and not ideas_ok:
+        tg_lines.append("⚠️ идеи в Контент не сохранены")
+
+    await bot.send_message(chat_id=int(OWNER_CHAT_ID), text="\n".join(tg_lines))
+    logger.info(
+        "prepare_news_digest done: archive_ok=%s, ideas=%d/%d",
+        archive_ok, ideas_count, len(ideas),
+    )
 
 
 async def send_news_digest(bot: Bot) -> None:
-    """08:30 — send today's news digest to Telegram."""
-    if not OWNER_CHAT_ID:
-        return
-    try:
-        today_iso = datetime.now(ROME_TZ).strftime("%Y-%m-%d")
-        if _news_digest_cache.get("date") == today_iso and _news_digest_cache.get("text"):
-            digest_body = _news_digest_cache["text"]
-        else:
-            digest = notion_get_latest_news_digest()
-            if not digest or not digest.get("body"):
-                logger.warning("send_news_digest: no digest found in archive")
-                return
-            digest_body = digest["body"]
-
-        now_str = datetime.now(ROME_TZ).strftime("%d.%m.%Y")
-        text    = f"📰 Новостной дайджест — {now_str}\n\n{digest_body}"
-
-        if len(text) > 4096:
-            text = text[:4090] + "..."
-
-        await bot.send_message(chat_id=int(OWNER_CHAT_ID), text=text)
-        logger.info("News digest sent")
-    except Exception as e:
-        logger.error("send_news_digest error: %s", e)
+    """No-op: digest is now fully handled by prepare_news_digest (Notion-first flow)."""
+    pass
 
 
 # ---------------------------------------------------------------------------
@@ -1626,7 +1847,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await send_sunday_digest(context.bot)
         elif data == "test_news":
             await prepare_news_digest(context.bot)
-            await send_news_digest(context.bot)
         elif data == "test_archive":
             now       = datetime.now(ROME_TZ)
             today_iso = now.strftime("%Y-%m-%d")
@@ -2137,11 +2357,9 @@ async def post_init(app: Application) -> None:
     scheduler = AsyncIOScheduler(timezone=ROME_TZ)
     scheduler.add_job(send_morning_digest, CronTrigger(hour=8, minute=0, timezone=ROME_TZ),
                       args=[app.bot], id="morning", replace_existing=True)
-    # Новостной дайджест — подготовка 08:25, отправка 08:30
-    scheduler.add_job(prepare_news_digest, CronTrigger(hour=8, minute=25, timezone=ROME_TZ),
-                      args=[app.bot], id="news_prepare", replace_existing=True)
-    scheduler.add_job(send_news_digest, CronTrigger(hour=8, minute=30, timezone=ROME_TZ),
-                      args=[app.bot], id="news_send", replace_existing=True)
+    # Новостной дайджест — 08:05 каждый день (Notion-first: архив → идеи → тизер в Telegram)
+    scheduler.add_job(prepare_news_digest, CronTrigger(hour=8, minute=5, timezone=ROME_TZ),
+                      args=[app.bot], id="news_digest", replace_existing=True)
     # Вечерняя — все дни кроме пятницы
     scheduler.add_job(send_evening_digest,
                       CronTrigger(day_of_week="mon,tue,wed,thu,sat,sun", hour=21, minute=0, timezone=ROME_TZ),
@@ -2155,7 +2373,7 @@ async def post_init(app: Application) -> None:
                       CronTrigger(day_of_week="sun", hour=9, minute=0, timezone=ROME_TZ),
                       args=[app.bot], id="sunday", replace_existing=True)
     scheduler.start()
-    logger.info("Scheduler started: 08:00 / 08:25 (news_prepare) / 08:30 (news_send) / 21:00 (пн-чт,сб) / пт 21:00 / вс 09:00 Europe/Rome")
+    logger.info("Scheduler started: 08:00 (morning) / 08:05 (news_digest) / 21:00 (пн-чт,сб) / пт 21:00 / вс 09:00 Europe/Rome")
 
 
 def main() -> None:
