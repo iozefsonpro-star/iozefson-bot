@@ -1,5 +1,6 @@
 import os
 import io
+import re
 import logging
 import datetime as dt_module
 from datetime import datetime, timedelta, date as date_cls
@@ -118,7 +119,9 @@ NEWS_DIGEST_SYSTEM = (
     "ЗАЦЕПКА: <готовая первая строка поста>\n"
     "УГОЛ: <1–2 предложения: какой угол взять>\n"
     "<пустая строка между идеями>\n"
-    "[/IDEAS]"
+    "[/IDEAS]\n\n"
+    "ВАЖНО: начни ответ сразу с [FULL_DIGEST] — никакого вводного текста, "
+    "никакой преамбулы до тега. Все три секции обязательны."
 )
 
 # ---------------------------------------------------------------------------
@@ -241,22 +244,45 @@ def _digest_title_ru(date_iso: str) -> str:
     return f"Дайджест · {d.day} {_MONTHS_GEN[d.month]} {d.year}"
 
 
+_URL_RE = re.compile(r'(https?://\S+)')
+
+
+def _line_to_rich_text(line: str) -> list[dict]:
+    """Build Notion rich_text segments for a single line, making URLs clickable."""
+    segments: list[dict] = []
+    for part in _URL_RE.split(line):
+        if not part:
+            continue
+        if _URL_RE.fullmatch(part):
+            url = part.rstrip('.,;:!?)"\'')
+            segments.append({"type": "text", "text": {"content": url, "link": {"url": url}}})
+            tail = part[len(url):]
+            if tail:
+                segments.append({"type": "text", "text": {"content": tail}})
+        else:
+            segments.append({"type": "text", "text": {"content": part}})
+    return segments or [{"type": "text", "text": {"content": ""}}]
+
+
 def _text_to_notion_blocks(text: str) -> list[dict]:
-    """Split text into Notion paragraph blocks (≤1900 chars each)."""
-    chunks = []
+    """Split text into Notion paragraph blocks (≤1900 chars each), with clickable URLs."""
+    blocks = []
     for line in text.split("\n"):
-        while len(line) > 1900:
-            chunks.append(line[:1900])
-            line = line[1900:]
-        chunks.append(line)
-    return [
-        {
+        if len(line) > 1900:
+            # Long line edge case: split as plain text to stay within limits
+            while len(line) > 1900:
+                blocks.append({
+                    "object": "block",
+                    "type": "paragraph",
+                    "paragraph": {"rich_text": [{"type": "text", "text": {"content": line[:1900]}}]},
+                })
+                line = line[1900:]
+        blocks.append({
             "object": "block",
             "type": "paragraph",
-            "paragraph": {"rich_text": [{"type": "text", "text": {"content": chunk}}]},
-        }
-        for chunk in chunks
-    ]
+            "paragraph": {"rich_text": _line_to_rich_text(line)},
+        })
+    return blocks
 
 
 def notion_save_news_digest(date_iso: str, text: str) -> tuple[str, str] | tuple[None, None]:
@@ -451,23 +477,42 @@ def notion_get_content_feedback() -> str:
         return ""
 
 
+_NEXT_SECTION_RE = re.compile(r'\[(?!/)[A-Z_]+\]')
+_MARKERS_RE      = re.compile(r'\[/?(?:FULL_DIGEST|TEASER|IDEAS)[^\]]*\]')
+
+
 def _parse_digest_output(text: str) -> dict:
-    """Parse structured digest output into full_digest, teaser_lines, ideas sections."""
+    """Parse structured digest output into full_digest, teaser_lines, ideas sections.
+
+    Robust against: missing close tags (truncation), extra preamble before [FULL_DIGEST],
+    partial close tags like [/FULL instead of [/FULL_DIGEST].
+    """
     def _extract(tag: str) -> str:
-        open_tag  = f"[{tag}]"
-        close_tag = f"[/{tag}]"
-        start = text.find(open_tag)
-        end   = text.find(close_tag)
-        if start == -1 or end == -1:
+        open_pat  = re.compile(rf'\[{tag}\]', re.IGNORECASE)
+        close_pat = re.compile(rf'\[/{tag}\]', re.IGNORECASE)
+        m_open = open_pat.search(text)
+        if not m_open:
             return ""
-        return text[start + len(open_tag):end].strip()
+        body_start = m_open.end()
+        m_close = close_pat.search(text, body_start)
+        if m_close:
+            return text[body_start:m_close.start()].strip()
+        # Close tag missing (truncation): use next opening section tag as boundary
+        m_next = _NEXT_SECTION_RE.search(text, body_start)
+        if m_next:
+            return text[body_start:m_next.start()].strip()
+        return text[body_start:].strip()
 
     full_digest = _extract("FULL_DIGEST")
     teaser_raw  = _extract("TEASER")
     ideas_raw   = _extract("IDEAS")
 
     if not full_digest:
-        full_digest = text.strip()
+        # Absolute fallback: use everything, strip known preamble/markers
+        full_digest = _MARKERS_RE.sub("", text).strip()
+
+    # Remove any marker artifacts that leaked into the digest body
+    full_digest = _MARKERS_RE.sub("", full_digest).strip()
 
     teaser_lines = [ln.strip() for ln in teaser_raw.split("\n") if ln.strip()] if teaser_raw else []
 
@@ -487,6 +532,10 @@ def _parse_digest_output(text: str) -> dict:
         if current.get("topic"):
             ideas.append(current)
 
+    logger.info(
+        "_parse_digest_output: digest_len=%d, teaser_lines=%d, ideas=%d",
+        len(full_digest), len(teaser_lines), len(ideas),
+    )
     return {
         "full_digest": full_digest,
         "teaser_lines": teaser_lines,
@@ -1678,7 +1727,7 @@ async def prepare_news_digest(bot: Bot) -> None:
 
     # Research via Claude + web search
     try:
-        raw = ask_claude_with_search(NEWS_DIGEST_SYSTEM, user_msg, max_tokens=4096)
+        raw = ask_claude_with_search(NEWS_DIGEST_SYSTEM, user_msg, max_tokens=8096)
         if not raw.strip():
             logger.warning("prepare_news_digest: empty response from Claude")
             await bot.send_message(
@@ -1692,6 +1741,10 @@ async def prepare_news_digest(bot: Bot) -> None:
         ideas        = parsed["ideas"]
         _news_digest_cache["date"] = today_iso
         _news_digest_cache["text"] = digest_text
+        if not teaser_lines:
+            logger.warning("prepare_news_digest: teaser is empty after parsing")
+        if not ideas:
+            logger.warning("prepare_news_digest: no ideas parsed from Claude response")
     except Exception as e:
         logger.error("prepare_news_digest: Claude error: %s", e)
         await bot.send_message(
