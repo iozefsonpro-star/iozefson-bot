@@ -95,7 +95,7 @@ NEWS_DIGEST_SYSTEM = (
     "🤖 AI и цифровая трансформация — практическое применение, не хайп\n"
     "⚖️ Регуляторика — AI Act, налоги, партита IVA, трудовое право\n"
     "🌍 Что касается меня лично — Россия (санкции, банки, поездки), Израиль (фоновый радар)\n"
-    "💡 Повод для поста — 1–3 идеи для LinkedIn с первой строкой-зацепкой\n\n"
+    "💡 Повод для поста — 1–2 идеи для LinkedIn с провокационным хуком\n\n"
     "Правила:\n"
     "- Энергофильтр: каждый пункт должен задевать бизнес, клиентов, рынок или лично Юлию. "
     "«Просто новость» выкидываем.\n"
@@ -114,11 +114,21 @@ NEWS_DIGEST_SYSTEM = (
     "<рубрики без новостей — не включать>\n"
     "[/TEASER]\n\n"
     "[IDEAS]\n"
-    "<1–3 блока, по одному на каждую идею поста:>\n"
-    "ТЕМА: <краткая тема 3–7 слов>\n"
-    "ЗАЦЕПКА: <готовая первая строка поста>\n"
-    "УГОЛ: <1–2 предложения: какой угол взять>\n"
-    "<пустая строка между идеями>\n"
+    "Genera 1-2 idee per post LinkedIn (solo le migliori, non riempire per quantità).\n"
+    "Per ogni idea usa questo formato esatto:\n"
+    "Idea 1:\n"
+    "Tema: <argomento specifico, max 10 parole>\n"
+    "Hook: <prime 1-2 righe del post>\n"
+    "\n"
+    "Idea 2:\n"
+    "Tema: ...\n"
+    "Hook: ...\n"
+    "\n"
+    "Tono dell'hook — provocazione esperta calma. NON parafrasi della notizia.\n"
+    "Formati OK: «Tutti dicono X. Quasi nessuno fa Y prima.» / "
+    "«Il problema non è [tema]. È che [verità scomoda].» / "
+    "«[Dato/fatto]. Cosa significa per le PMI italiane?»\n"
+    "Formati NO: «Oggi è uscita la normativa su…» / «L'AI sta cambiando tutto» (generico)\n"
     "[/IDEAS]\n\n"
     "ВАЖНО: начни ответ сразу с [FULL_DIGEST] — никакого вводного текста, "
     "никакой преамбулы до тега. Все три секции обязательны."
@@ -407,7 +417,7 @@ def notion_create_content_idea(topic: str, hook: str) -> bool:
 
 
 def notion_create_content_ideas(ideas: list[dict], today_iso: str) -> int:
-    """Create 1–3 idea entries in ✍️ Контент. Returns count of successfully created records."""
+    """Create 1–2 idea entries in ✍️ Контент. Returns count of successfully created records."""
     if not NOTION_CONTENT_DB_ID:
         logger.error("notion_create_content_ideas: NOTION_CONTENT_DB_ID not set")
         return 0
@@ -430,6 +440,7 @@ def notion_create_content_ideas(ideas: list[dict], today_iso: str) -> int:
                     "Статус":      {"select": {"name": "💡 Идея"}},
                     "Вердикт":     {"select": {"name": "🆕 Новое"}},
                     "Из новостей": {"checkbox": True},
+                    "Рубрика":     {"select": {"name": "Новости (Паола)"}},
                     "Комментарий": {"rich_text": [{"text": {"content": comment[:2000]}}]},
                 },
             )
@@ -521,7 +532,28 @@ def _parse_digest_output(text: str) -> dict:
         current: dict = {}
         for line in ideas_raw.split("\n"):
             line = line.strip()
-            if line.startswith("ТЕМА:"):
+            # New format: "Idea N:" — start of a new idea block
+            if re.match(r'^Idea\s+\d+\s*:', line, re.IGNORECASE):
+                if current.get("topic"):
+                    ideas.append(current)
+                current = {"topic": "", "hook": "", "angle": ""}
+            # New Italian format: Tema:
+            elif line.lower().startswith("tema:"):
+                val = line[5:].strip()
+                if current.get("topic"):
+                    ideas.append(current)
+                    current = {"topic": val, "hook": "", "angle": ""}
+                else:
+                    current.setdefault("hook", "")
+                    current.setdefault("angle", "")
+                    current["topic"] = val
+            # New Italian format: Hook:
+            elif line.lower().startswith("hook:"):
+                current.setdefault("topic", "")
+                current.setdefault("angle", "")
+                current["hook"] = line[5:].strip()
+            # Old Russian format fallbacks
+            elif line.startswith("ТЕМА:"):
                 if current.get("topic"):
                     ideas.append(current)
                 current = {"topic": line[5:].strip(), "hook": "", "angle": ""}
@@ -539,7 +571,7 @@ def _parse_digest_output(text: str) -> dict:
     return {
         "full_digest": full_digest,
         "teaser_lines": teaser_lines,
-        "ideas": ideas[:3],
+        "ideas": ideas[:2],
     }
 
 
