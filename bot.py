@@ -86,28 +86,41 @@ SYSTEM_PROMPT = (
 _news_digest_cache: dict = {}  # {"date": "YYYY-MM-DD", "text": "..."}
 
 NEWS_DIGEST_SYSTEM = (
-    "Ты готовишь ежедневный новостной дайджест для Юлии Иозефсон, "
-    "независимого бизнес-консультанта (Италия, Дезио).\n\n"
+    "Ты готовишь новостной дайджест для Юлии Иозефсон, "
+    "независимого бизнес-консультанта (Италия, Дезио). Выходит по понедельникам, средам и пятницам.\n\n"
     "Язык ответа: русский. Тон: партнёрский, связный, без рубленых тезисов.\n\n"
-    "Шесть рубрик:\n"
-    "🇮🇹 Италия и бизнес-климат — макро, экономика, Ломбардия/Милан через призму бизнеса и PMI\n"
-    "🏢 Индустрии клиентов — страхование, финансы, made-in-Italy, люкс, hospitality\n"
-    "🤖 AI и цифровая трансформация — практическое применение, не хайп\n"
-    "⚖️ Регуляторика — AI Act, налоги, партита IVA, трудовое право\n"
-    "🌍 Что касается меня лично — Россия (санкции, банки, поездки), Израиль (фоновый радар)\n"
-    "💡 Повод для поста — 1–2 идеи для LinkedIn с провокационным хуком\n\n"
+    "Пять рубрик, строго в этом порядке:\n"
+    "🌍 Мир за 360° — короткий мировой обзор: политика + экономика, главные блоки, 2–3 строки. "
+    "Сюда же — личный радар (Россия/Израиль: санкции, банки, рейсы, безопасность), но только при реальной важности.\n"
+    "🇮🇹 Италия: реальный бизнес — ядро. PMI, промышленность, машиностроение, производство, made-in-Italy, "
+    "бизнес-тренды и реальные кейсы. НЕ страховые. Регуляторика бизнеса (налоги, партита IVA, трудовое право) — сюда же. "
+    "Люкс — только если за ним реальный кейс.\n"
+    "🤖 AI & digital — мировые игроки: Anthropic, OpenAI, Microsoft, Google, Musk/SpaceX, саммиты лидеров. "
+    "Практика, не хайп. Сквозная линия — AI Act (вступление 2 августа), коротко «где мы», "
+    "без зацикливания на «PMI/Generali не готовы».\n"
+    "🛡️ Страховой контекст — только game-changers, фон ~раз в месяц. Нет крупного — рубрику молча пропускаем.\n"
+    "💡 Повод для поста — 1–2 угла для LinkedIn с готовой первой строкой-зацепкой.\n\n"
     "Правила:\n"
     "- Энергофильтр: каждый пункт должен задевать бизнес, клиентов, рынок или лично Юлию. "
     "«Просто новость» выкидываем.\n"
-    "- Свежесть: последние 24–48 часов. Без повторения вчерашних тем без нового развития.\n"
+    "- Свежесть: окно указано в сообщении пользователя (зависит от дня недели — после выходных оно шире). "
+    "Без повторения тем без нового развития.\n"
     "- Тишина лучше воды: если в рубрике нет ничего стоящего — пропустить молча.\n"
-    "- Trust-лист источников: Il Sole 24 Ore, Corriere (Il Punto), ANSA, ISTAT, Bankitalia, "
-    "Confcommercio, Pambianco, BBC, официальные документы ЕС (Consilium), Reuters.\n"
+    "- Первоисточник, а не пересказ: для AI — блоги самих лабораторий (Anthropic, OpenAI, Google DeepMind, "
+    "Microsoft) и международная тех-пресса в оригинале (Reuters Tech, TechCrunch, The Verge). Для регуляторики — "
+    "текст документа ЕС / Gazzetta Ufficiale. Для мира — Reuters / BBC / Bloomberg / FT в оригинале. "
+    "Запрет на итальянские перепечатки одного и того же исследования/опроса как самостоятельной новости.\n"
+    "- Рубрика «AI & digital» должна тянуть мировые события (саммиты лидеров, релизы гигантов, SpaceX), "
+    "а не только локальную итальянскую историю «PMI не готовы».\n"
+    "- Trust-лист источников: Il Sole 24 Ore, Corriere (Il Punto), ANSA, ISTAT, Bankitalia, Confcommercio, "
+    "Pambianco — для Италии; Reuters, BBC, Bloomberg, FT, официальные документы ЕС (Consilium) — для мира и "
+    "регуляторики; блоги Anthropic / OpenAI / Google DeepMind / Microsoft, Reuters Tech, TechCrunch, "
+    "The Verge — для AI.\n"
     "- Ссылки: в конце каждой рубрики 1-2 прямых URL: 🔗 https://... (только реальные).\n"
     "- Отвечай только plain text и эмодзи, без Markdown звёздочек.\n\n"
     "ОБЯЗАТЕЛЬНЫЙ ФОРМАТ ВЫВОДА — строго три секции с тегами (все три обязательны):\n\n"
     "[FULL_DIGEST]\n"
-    "<полный дайджест по всем 6 рубрикам со ссылками>\n"
+    "<полный дайджест по всем 5 рубрикам со ссылками>\n"
     "[/FULL_DIGEST]\n\n"
     "[TEASER]\n"
     "<одна строка на каждую рубрику с новостью: {эмодзи рубрики} {краткий заголовок}>\n"
@@ -203,39 +216,45 @@ def notion_create_task(
     )
 
 
-def notion_get_latest_news_digest() -> dict | None:
-    """Get the most recent entry from Архив новостей database."""
+def notion_get_recent_news_digests(limit: int = 1) -> list[dict]:
+    """Get the most recent N entries from Архив новостей database (newest first)."""
     if not NOTION_NEWS_ARCHIVE_DB_ID:
-        return None
+        return []
     try:
         resp = notion.databases.query(
             database_id=NOTION_NEWS_ARCHIVE_DB_ID,
             sorts=[{"property": "Дата выпуска", "direction": "descending"}],
-            page_size=1,
+            page_size=limit,
         )
-        if not resp.get("results"):
-            return None
-        page = resp["results"][0]
-        date_prop  = page["properties"].get("Дата выпуска", {}).get("date")
-        date_str   = date_prop["start"] if date_prop else None
-        title_prop = page["properties"].get("Выпуск", {}).get("title", [])
-        title      = title_prop[0]["text"]["content"] if title_prop else ""
+        entries = []
+        for page in resp.get("results", []):
+            date_prop  = page["properties"].get("Дата выпуска", {}).get("date")
+            date_str   = date_prop["start"] if date_prop else None
+            title_prop = page["properties"].get("Выпуск", {}).get("title", [])
+            title      = title_prop[0]["text"]["content"] if title_prop else ""
 
-        blocks     = notion.blocks.children.list(block_id=page["id"])
-        body_parts = []
-        for block in blocks.get("results", []):
-            btype = block.get("type")
-            if btype in ("paragraph", "bulleted_list_item", "numbered_list_item",
-                         "heading_1", "heading_2", "heading_3"):
-                rich_text = block.get(btype, {}).get("rich_text", [])
-                text = "".join(rt.get("text", {}).get("content", "") for rt in rich_text)
-                if text:
-                    body_parts.append(text)
+            blocks     = notion.blocks.children.list(block_id=page["id"])
+            body_parts = []
+            for block in blocks.get("results", []):
+                btype = block.get("type")
+                if btype in ("paragraph", "bulleted_list_item", "numbered_list_item",
+                             "heading_1", "heading_2", "heading_3"):
+                    rich_text = block.get(btype, {}).get("rich_text", [])
+                    text = "".join(rt.get("text", {}).get("content", "") for rt in rich_text)
+                    if text:
+                        body_parts.append(text)
 
-        return {"id": page["id"], "date": date_str, "title": title, "body": "\n".join(body_parts)}
+            entries.append({"id": page["id"], "date": date_str, "title": title, "body": "\n".join(body_parts)})
+        return entries
     except Exception as e:
-        logger.error("notion_get_latest_news_digest error: %s", e)
-        return None
+        logger.error("notion_get_recent_news_digests error: %s", e)
+        return []
+
+
+def notion_get_latest_news_digest() -> dict | None:
+    """Get the most recent entry from Архив новостей database."""
+    entries = notion_get_recent_news_digests(limit=1)
+    return entries[0] if entries else None
 
 
 _MONTHS_GEN = {
@@ -1727,29 +1746,37 @@ async def send_evening_digest(bot: Bot, app=None) -> None:
 
 
 async def prepare_news_digest(bot: Bot) -> None:
-    """08:05 — Notion-first news digest: research → archive page → content ideas → Telegram teaser."""
+    """Пн/ср/пт 08:05 — Notion-first news digest: research → archive page → content ideas → Telegram teaser."""
     if not OWNER_CHAT_ID:
         return
 
     now       = datetime.now(ROME_TZ)
     today_iso = now.strftime("%Y-%m-%d")
 
+    # Окно свежести зависит от дня недели: после выходных (понедельник) разрыв с пятницы — 3 дня
+    freshness_hours = 72 if now.weekday() == 0 else 48
+
     # Block E: learning loop — past verdicts for the prompt
     feedback_str = notion_get_content_feedback()
 
-    # Dedup: yesterday's digest body
-    last_digest     = notion_get_latest_news_digest()
-    yesterday_block = ""
-    if last_digest and last_digest.get("body"):
-        yesterday_block = (
-            f"\n\nВчерашний выпуск (не повторять темы без нового развития):\n"
-            f"{last_digest['body'][:2000]}"
+    # Dedup: последние 3-5 архивных выпусков, чтобы сюжеты не повторялись между выпусками
+    recent_digests = notion_get_recent_news_digests(limit=5)
+    recent_block   = ""
+    recent_bodies  = [d for d in recent_digests if d.get("body")]
+    if recent_bodies:
+        issues_text = "\n\n".join(
+            f"Выпуск {d['date']}:\n{d['body'][:1500]}" for d in recent_bodies
+        )
+        recent_block = (
+            f"\n\nПоследние {len(recent_bodies)} выпуска(ов) из архива "
+            f"(не повторять уже раскрытый сюжет, если нет нового развития темы):\n"
+            f"{issues_text}"
         )
 
     user_msg = (
-        f"Подготовь дайджест новостей за последние 24–48 часов. "
+        f"Подготовь дайджест новостей за последние {freshness_hours} часов. "
         f"Сегодня {now.strftime('%d.%m.%Y')}."
-        f"{yesterday_block}"
+        f"{recent_block}"
         + (f"\n\n{feedback_str}" if feedback_str else "")
     )
 
@@ -2446,8 +2473,9 @@ async def post_init(app: Application) -> None:
     scheduler = AsyncIOScheduler(timezone=ROME_TZ)
     scheduler.add_job(send_morning_digest, CronTrigger(hour=8, minute=0, timezone=ROME_TZ),
                       args=[app.bot], id="morning", replace_existing=True)
-    # Новостной дайджест — 08:05 каждый день (Notion-first: архив → идеи → тизер в Telegram)
-    scheduler.add_job(prepare_news_digest, CronTrigger(hour=8, minute=5, timezone=ROME_TZ),
+    # Новостной дайджест — пн/ср/пт 08:05 (Notion-first: архив → идеи → тизер в Telegram)
+    scheduler.add_job(prepare_news_digest,
+                      CronTrigger(day_of_week="mon,wed,fri", hour=8, minute=5, timezone=ROME_TZ),
                       args=[app.bot], id="news_digest", replace_existing=True)
     # Вечерняя — все дни кроме пятницы
     scheduler.add_job(send_evening_digest,
@@ -2462,7 +2490,7 @@ async def post_init(app: Application) -> None:
                       CronTrigger(day_of_week="sun", hour=9, minute=0, timezone=ROME_TZ),
                       args=[app.bot], id="sunday", replace_existing=True)
     scheduler.start()
-    logger.info("Scheduler started: 08:00 (morning) / 08:05 (news_digest) / 21:00 (пн-чт,сб) / пт 21:00 / вс 09:00 Europe/Rome")
+    logger.info("Scheduler started: 08:00 (morning) / 08:05 (news_digest, пн/ср/пт) / 21:00 (пн-чт,сб) / пт 21:00 / вс 09:00 Europe/Rome")
 
 
 def main() -> None:
