@@ -1535,9 +1535,14 @@ async def send_friday_digest(bot: Bot) -> None:
         # 2. Переносится (только если есть)
         if undone_this_week:
             parts.append("⏩ Переносится на следующую неделю:")
+            by_zone_undone: dict[str, list[str]] = {}
             for t in undone_this_week:
-                zone = f"[{t['zone']}] " if t.get("zone") else ""
-                parts.append(f"• {zone}{t['title']}")
+                zone = t.get("zone") or "📌 Без зоны"
+                by_zone_undone.setdefault(zone, []).append(t["title"])
+            for zone, titles in by_zone_undone.items():
+                parts.append(f"{zone}:")
+                for title in titles:
+                    parts.append(f"  • {title}")
             parts.append("")
 
         # 3. Выходные (только для текущей недели — при ретроспективе уже прошли)
