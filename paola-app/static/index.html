@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Паола — ассистент</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<!-- Экран входа -->
+<div id="login-screen" class="login-screen hidden">
+  <form id="login-form" class="login-card">
+    <div class="login-mark">P.</div>
+    <h1>Паола</h1>
+    <p class="login-sub">рутина + аналитика</p>
+    <input type="password" id="login-password" placeholder="Пароль" autocomplete="current-password" required>
+    <button type="submit">Войти</button>
+    <p id="login-error" class="login-error hidden">Неверный пароль</p>
+  </form>
+</div>
+
+<!-- Приложение -->
+<div id="app" class="app hidden">
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark">P.</span> Паола <span id="today-date" class="topbar-date"></span></div>
+    <button id="logout-btn" class="ghost-btn" type="button">Выйти</button>
+  </header>
+
+  <main class="layout">
+
+    <!-- ЛЕВАЯ КОЛОНКА: РУТИНА -->
+    <section class="col routine">
+      <div class="card">
+        <div class="card-head">
+          <h2>Сводка</h2>
+          <div class="seg">
+            <button class="seg-btn active" data-digest="morning" type="button">Утро</button>
+            <button class="seg-btn" data-digest="evening" type="button">Вечер</button>
+          </div>
+        </div>
+        <pre id="digest-text" class="digest">Загружаю…</pre>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>Привычки</h2><span id="habits-date" class="card-note"></span></div>
+        <ul id="habits-list" class="habits"></ul>
+        <p id="habits-empty" class="empty hidden">Активных привычек нет — добавь их в базу Notion «Привычки».</p>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>Напоминания</h2></div>
+        <ul id="reminders-list" class="reminders"></ul>
+        <p id="reminders-empty" class="empty hidden">Ожидающих напоминаний нет.</p>
+        <form id="reminder-form" class="reminder-form">
+          <input type="text" id="reminder-text" placeholder="О чём напомнить" required>
+          <input type="datetime-local" id="reminder-when" required>
+          <button type="submit">Создать</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- ПРАВАЯ КОЛОНКА: АНАЛИТИКА -->
+    <section class="col analytics">
+      <div class="card chat-card">
+        <div class="card-head">
+          <h2>Аналитика</h2>
+          <button id="chat-reset" class="ghost-btn" type="button">Новый диалог</button>
+        </div>
+        <div class="quick-actions">
+          <button class="qa" type="button" data-prefill="Сделай ресерч по теме: ">🔎 Ресерч</button>
+          <button class="qa" type="button" data-prefill="Переведи на итальянский (деловой стиль): ">🇮🇹 Перевод</button>
+          <button class="qa" type="button" data-prefill="Собери совет директоров и оцените идею: ">🏛 Совет директоров</button>
+          <button class="qa" type="button" data-prefill="Проанализируй конкурентов и рынок: ">📊 Рынок</button>
+          <button class="qa" type="button" data-prefill="Разбери бизнес-модель: ">🧩 Бизнес-модель</button>
+        </div>
+        <div id="chat-log" class="chat-log">
+          <div class="msg assistant">Привет! Я готова: ресерч, переводы, совет директоров, анализ рынка и бизнес-моделей — или просто скажи, что записать в задачи.</div>
+        </div>
+        <form id="chat-form" class="chat-form">
+          <textarea id="chat-input" rows="2" placeholder="Спроси или поручи…" required></textarea>
+          <button type="submit" id="chat-send">➤</button>
+        </form>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
