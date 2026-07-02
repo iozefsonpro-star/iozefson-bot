@@ -43,15 +43,20 @@
       </div>
 
       <div class="card">
+        <div class="card-head"><h2>Задачи</h2><button id="tasks-refresh" class="ghost-btn" type="button">Обновить</button></div>
+        <div id="tasks-body">Загружаю…</div>
+      </div>
+
+      <div class="card">
         <div class="card-head"><h2>Привычки</h2><span id="habits-date" class="card-note"></span></div>
         <ul id="habits-list" class="habits"></ul>
-        <p id="habits-empty" class="empty hidden">Активных привычек нет — добавь их в базу Notion «Привычки».</p>
+        <p id="habits-empty" class="empty hidden"></p>
       </div>
 
       <div class="card">
         <div class="card-head"><h2>Напоминания</h2></div>
         <ul id="reminders-list" class="reminders"></ul>
-        <p id="reminders-empty" class="empty hidden">Ожидающих напоминаний нет.</p>
+        <p id="reminders-empty" class="empty hidden"></p>
         <form id="reminder-form" class="reminder-form">
           <input type="text" id="reminder-text" placeholder="О чём напомнить" required>
           <input type="datetime-local" id="reminder-when" required>
@@ -63,29 +68,75 @@
     <!-- ПРАВАЯ КОЛОНКА: АНАЛИТИКА -->
     <section class="col analytics">
       <div class="card chat-card">
-        <div class="card-head">
-          <h2>Аналитика</h2>
-          <button id="chat-reset" class="ghost-btn" type="button">Новый диалог</button>
+        <div class="chat-shell">
+
+          <aside class="chat-rail">
+            <div class="rail-head">
+              <span>Диалоги</span>
+              <button id="new-chat-btn" class="ghost-btn" type="button" title="Новый чат">＋ чат</button>
+            </div>
+            <div id="rail-list" class="rail-list"></div>
+            <button id="new-project-btn" class="rail-project-btn" type="button">＋ проект</button>
+          </aside>
+
+          <div class="chat-pane">
+            <div class="chat-pane-head">
+              <div>
+                <div id="chat-title" class="chat-title">—</div>
+                <div id="chat-mode" class="chat-mode"></div>
+              </div>
+              <button id="chat-delete" class="ghost-btn danger" type="button">Удалить чат</button>
+            </div>
+            <div id="chat-log" class="chat-log"></div>
+            <form id="chat-form" class="chat-form">
+              <textarea id="chat-input" rows="2" placeholder="Напиши…" required></textarea>
+              <button type="submit" id="chat-send">➤</button>
+            </form>
+          </div>
+
         </div>
-        <div class="quick-actions">
-          <button class="qa" type="button" data-prefill="Сделай ресерч по теме: ">🔎 Ресерч</button>
-          <button class="qa" type="button" data-prefill="Переведи на итальянский (деловой стиль): ">🇮🇹 Перевод</button>
-          <button class="qa" type="button" data-prefill="Собери совет директоров и оцените идею: ">🏛 Совет директоров</button>
-          <button class="qa" type="button" data-prefill="Проанализируй конкурентов и рынок: ">📊 Рынок</button>
-          <button class="qa" type="button" data-prefill="Разбери бизнес-модель: ">🧩 Бизнес-модель</button>
-        </div>
-        <div id="chat-log" class="chat-log">
-          <div class="msg assistant">Привет! Я готова: ресерч, переводы, совет директоров, анализ рынка и бизнес-моделей — или просто скажи, что записать в задачи.</div>
-        </div>
-        <form id="chat-form" class="chat-form">
-          <textarea id="chat-input" rows="2" placeholder="Спроси или поручи…" required></textarea>
-          <button type="submit" id="chat-send">➤</button>
-        </form>
       </div>
     </section>
 
   </main>
 </div>
+
+<!-- Диалог: новый чат -->
+<dialog id="dlg-chat">
+  <form method="dialog" class="dlg-form" id="dlg-chat-form">
+    <h3>Новый чат</h3>
+    <label>Тип
+      <select id="dlg-chat-mode"></select>
+    </label>
+    <label>Проект (необязательно)
+      <select id="dlg-chat-project"><option value="">— без проекта —</option></select>
+    </label>
+    <label>Название (необязательно)
+      <input type="text" id="dlg-chat-title" placeholder="Например: Ресерч рынка упаковки">
+    </label>
+    <div class="dlg-actions">
+      <button value="cancel" class="ghost-btn" formnovalidate>Отмена</button>
+      <button value="ok" id="dlg-chat-ok">Создать</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Диалог: новый проект -->
+<dialog id="dlg-project">
+  <form method="dialog" class="dlg-form" id="dlg-project-form">
+    <h3>Новый проект</h3>
+    <label>Название
+      <input type="text" id="dlg-project-name" placeholder="Например: Клиент Rossi Srl" required>
+    </label>
+    <label>Контекст для Паолы (необязательно)
+      <textarea id="dlg-project-desc" rows="3" placeholder="Чем занимается клиент, что анализируем, цель проекта…"></textarea>
+    </label>
+    <div class="dlg-actions">
+      <button value="cancel" class="ghost-btn" formnovalidate>Отмена</button>
+      <button value="ok" id="dlg-project-ok">Создать</button>
+    </div>
+  </form>
+</dialog>
 
 <script src="/static/app.js"></script>
 </body>

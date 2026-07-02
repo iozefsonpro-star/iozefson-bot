@@ -1,5 +1,11 @@
-"""Агентное ядро: один цикл Claude + инструменты (задачи, календарь, привычки,
-напоминания, переводы, совет директоров) + серверный веб-поиск для ресерча.
+"""Агентное ядро с режимами чатов.
+
+Каждый режим — свой системный промпт и свой набор инструментов:
+  assistant  — полный набор (задачи, календарь, привычки, напоминания, всё остальное)
+  translator — переводчик без инструментов, быстрая модель
+  research   — веб-поиск + сохранение находок в задачи
+  board      — «совет директоров» + веб-поиск
+  business   — разбор бизнес-моделей + веб-поиск
 """
 import logging
 from datetime import datetime
@@ -13,77 +19,131 @@ logger = logging.getLogger(__name__)
 
 client = AsyncAnthropic(api_key=config.ANTHROPIC_API_KEY)
 
-MAX_TURNS = 12  # предохранитель от бесконечного цикла инструментов
+MAX_TURNS = 12
 
-SYSTEM_PROMPT = """\
+BASE_IDENTITY = """\
 Ты Паола — персональный ассистент Юлии Йозефсон, независимого бизнес-консультанта
 в Италии (Дезио). Позиционирование её бренда: «Prima i processi, poi l'AI»,
 клиенты — итальянские PMI и семейные компании.
-
-Ты работаешь в веб-приложении и закрываешь два слоя:
-1. Рутина: задачи, календарь, привычки, напоминания, фокус дня.
-2. Аналитика: ресерч по темам (веб-поиск), переводы RU/IT/EN, анализ конкурентов
-   и рынка, оценка бизнес-идей «советом директоров», разбор бизнес-моделей.
-
-Правила:
-- Говори по-русски, тон партнёрский и прямой, без подхалимства и воды.
-- У тебя есть реальные инструменты — используй их, а не рассказывай, что «не имеешь доступа».
-- Для ресерча, анализа рынка и конкурентов используй веб-поиск; всегда давай ссылки
-  на источники. Фильтр качества: Il Sole 24 Ore, ANSA, ISTAT, Reuters, FT, официальные
-  документы ЕС — надёжны; перепечатки и агрегаторы — нет.
-- Для оценки бизнес-идей вызывай board_review — не подменяй совет собственным мнением.
-- Анализ бизнес-моделей строй структурно: ценностное предложение, сегменты, каналы,
-  выручка, издержки, ключевые риски — и всегда привязывай к контексту Юлии.
-- Действия с данными (создать/закрыть/перенести задачу, отметить привычку) выполняй
-  сразу, без лишних уточнений, если смысл ясен. Уточняй только при реальной двусмысленности.
-- Отвечай кратко там, где вопрос простой, и обстоятельно там, где просят анализ.
+Говори по-русски, тон партнёрский и прямой, без подхалимства и воды.
 """
 
-WEB_SEARCH_TOOL = {
-    "type": "web_search_20260209",
-    "name": "web_search",
-    "max_uses": 8,
+WEB_SEARCH_TOOL = {"type": "web_search_20260209", "name": "web_search", "max_uses": 8}
+
+_TOOL_BY_NAME = {t["schema"]["name"]: t["schema"] for t in tools.ALL_TOOLS}
+
+
+def _pick(*names: str) -> list[dict]:
+    return [_TOOL_BY_NAME[n] for n in names if n in _TOOL_BY_NAME]
+
+
+MODES: dict[str, dict] = {
+    "assistant": {
+        "model": config.MODEL_SMART,
+        "tools": [WEB_SEARCH_TOOL] + tools.SCHEMAS,
+        "system": BASE_IDENTITY + """
+Это главный чат-ассистент. У тебя есть реальные инструменты: задачи и календарь,
+привычки, напоминания, переводы, веб-поиск, совет директоров — используй их,
+а не рассказывай, что «нет доступа». Действия с данными (создать/закрыть/перенести
+задачу, отметить привычку) выполняй сразу, если смысл ясен; уточняй только при
+реальной двусмысленности. Отвечай кратко на простое и обстоятельно на сложное.""",
+    },
+    "translator": {
+        "model": config.MODEL_FAST,
+        "tools": [],
+        "system": BASE_IDENTITY + """
+Это чат-переводчик (русский ⇄ итальянский ⇄ английский). Правила:
+- Каждое сообщение Юлии — текст на перевод. По умолчанию: русский → итальянский,
+  деловой стиль; итальянский/английский текст переводи на русский.
+- Если указано направление или стиль («на английский», «неформально») — следуй им.
+- Отвечай ТОЛЬКО переводом, без пояснений. Терминологию держи единой в рамках чата.
+- Для терминов с несколькими вариантами выбирай принятый в деловой практике Италии;
+  спорный вариант можно пометить альтернативой в скобках.""",
+    },
+    "research": {
+        "model": config.MODEL_SMART,
+        "tools": [WEB_SEARCH_TOOL] + _pick("create_task"),
+        "system": BASE_IDENTITY + """
+Это чат-ресерч. Задача — глубокое исследование тем по запросу с веб-поиском.
+- Всегда указывай источники ссылками. Надёжные: Il Sole 24 Ore, ANSA, ISTAT,
+  Bankitalia, Reuters, FT, Bloomberg, официальные документы ЕС. Агрегаторы и
+  перепечатки — не источник.
+- Структура ответа: краткий вывод → факты с цифрами и датами → источники →
+  что это значит для Юлии/клиента.
+- Если просят «сохранить» или «в задачи» — используй create_task.""",
+    },
+    "board": {
+        "model": config.MODEL_SMART,
+        "tools": [WEB_SEARCH_TOOL] + _pick("board_review"),
+        "system": BASE_IDENTITY + """
+Это чат «Совет директоров» — оценка бизнес-идей и решений.
+- Когда Юлия описывает идею — вызывай board_review с полным контекстом идеи.
+- Уточняющие вопросы после совета обсуждай сам(а), опираясь на выданные мнения;
+  повторно собирай совет только по явной просьбе или для новой идеи.
+- Если для оценки не хватает рыночных фактов — сначала проверь их веб-поиском.""",
+    },
+    "business": {
+        "model": config.MODEL_SMART,
+        "tools": [WEB_SEARCH_TOOL],
+        "system": BASE_IDENTITY + """
+Это чат разбора бизнес-моделей и анализа рынка/конкурентов.
+- Бизнес-модель разбирай структурно: ценностное предложение → сегменты клиентов →
+  каналы → потоки выручки → структура издержек → ключевые ресурсы и партнёры →
+  риски. В конце — 3 главных вопроса, которые надо проверить.
+- Конкурентов и рынок проверяй веб-поиском: реальные игроки, цены, динамика.
+  Цифры — с источниками.
+- Всегда привязывай выводы к контексту: итальянский рынок, PMI, специфика клиента.""",
+    },
 }
 
 
-def _system_with_date() -> str:
+def _system_for(mode: str, project_name: str | None, project_desc: str | None) -> str:
+    cfg = MODES.get(mode, MODES["assistant"])
     now = datetime.now(config.ROME_TZ)
     weekdays = ["понедельник", "вторник", "среда", "четверг",
                 "пятница", "суббота", "воскресенье"]
-    return SYSTEM_PROMPT + (
+    system = cfg["system"] + (
         f"\nСегодня {now:%d.%m.%Y}, {weekdays[now.weekday()]}, "
         f"время {now:%H:%M} (Europe/Rome)."
     )
+    if project_name:
+        system += (f"\n\nЭтот чат относится к проекту «{project_name}». "
+                   f"Весь анализ веди в контексте этого проекта.")
+        if project_desc:
+            system += f"\nОписание проекта: {project_desc}"
+    return system
 
 
 def _extract_text(content: list) -> str:
     return "\n".join(b.text for b in content if b.type == "text").strip()
 
 
-async def run_agent(messages: list[dict]) -> str:
-    """Прогнать диалог через агентный цикл. messages — история в формате API
-    (последнее сообщение — от пользователя). Возвращает текст ответа."""
+async def run_chat(mode: str, messages: list[dict],
+                   project_name: str | None = None,
+                   project_desc: str | None = None) -> str:
+    """Прогнать историю чата через агентный цикл выбранного режима."""
+    cfg = MODES.get(mode, MODES["assistant"])
+    system = _system_for(mode, project_name, project_desc)
     convo = list(messages)
-    all_tools = [WEB_SEARCH_TOOL] + tools.SCHEMAS
+
+    # режим без инструментов (переводчик) — один вызов
+    if not cfg["tools"]:
+        response = await client.messages.create(
+            model=cfg["model"], max_tokens=4000, system=system, messages=convo)
+        return _extract_text(response.content) or "(пустой ответ)"
 
     for _ in range(MAX_TURNS):
         response = await client.messages.create(
-            model=config.MODEL_SMART,
-            max_tokens=8000,
-            system=_system_with_date(),
-            tools=all_tools,
-            messages=convo,
-        )
+            model=cfg["model"], max_tokens=8000, system=system,
+            tools=cfg["tools"], messages=convo)
 
         if response.stop_reason == "pause_turn":
-            # серверный инструмент (веб-поиск) не закончил — продолжаем тот же ход
             convo.append({"role": "assistant", "content": response.content})
             continue
 
         if response.stop_reason != "tool_use":
             return _extract_text(response.content) or "(пустой ответ)"
 
-        # клиентские инструменты: выполняем все вызовы и возвращаем результаты
         convo.append({"role": "assistant", "content": response.content})
         results = []
         for block in response.content:
