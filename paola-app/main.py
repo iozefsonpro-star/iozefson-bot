@@ -116,6 +116,22 @@ async def get_digest(kind: str = "morning"):
         raise HTTPException(status_code=502, detail=_notion_hint(e))
 
 
+@app.get("/api/calendar")
+async def get_calendar(days: int = 0):
+    """События календаря для дашборда, сгруппированные по дням."""
+    if not config.GOOGLE_TOKEN_JSON:
+        return {"configured": False, "days": []}
+    from services import gcal
+    events = await gcal.get_events(days=min(days, 14))
+    by_day: dict[str, list] = {}
+    for ev in events:
+        by_day.setdefault(ev["day"], []).append(
+            {"time": ev["time"], "title": ev["title"],
+             "emoji": ev["emoji"], "calendar": ev["calendar"]})
+    return {"configured": True,
+            "days": [{"date": d, "events": by_day[d]} for d in sorted(by_day)]}
+
+
 @app.get("/api/tasks")
 async def get_tasks():
     """Задачи для дашборда: просроченные / сегодня / остальные активные."""

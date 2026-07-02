@@ -127,6 +127,18 @@ input,textarea,select{font-family:inherit;font-size:14px}
            white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .rail-item:hover{background:var(--petrol-wash)}
 .rail-item.active{background:var(--petrol);color:#fff}
+.rail-item.quick-new{color:var(--petrol-deep);font-size:13px}
+.rail-item.quick-new:hover{background:var(--petrol-wash)}
+
+/* календарь */
+.cal-day{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint);
+         margin:10px 0 5px}
+.cal-day:first-child{margin-top:0}
+.cal-event{display:flex;gap:10px;font-size:14px;padding:6px 10px;border-radius:var(--radius);
+           background:#FBFBF9;border:1px solid var(--line);margin-bottom:4px;
+           align-items:baseline}
+.cal-event .cal-time{white-space:nowrap;font-variant-numeric:tabular-nums;
+                     color:var(--petrol-deep);font-size:13px}
 .rail-project-btn{margin:10px 14px 14px;border:1px dashed var(--line);background:none;
                   border-radius:var(--radius);padding:7px;color:var(--ink-soft);font-size:13px}
 .rail-project-btn:hover{border-color:var(--petrol);color:var(--petrol)}

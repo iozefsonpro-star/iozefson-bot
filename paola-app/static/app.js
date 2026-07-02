@@ -33,7 +33,7 @@ function showApp() {
   $("#app").classList.remove("hidden");
   $("#today-date").textContent = new Date().toLocaleDateString("ru-RU",
     { weekday: "long", day: "numeric", month: "long" });
-  loadDigest("morning");
+  loadCalendar(0);
   loadTasks();
   loadHabits();
   loadReminders();
@@ -58,15 +58,47 @@ $("#logout-btn").addEventListener("click", async () => {
   showLogin();
 });
 
-/* ---------------- сводка ---------------- */
+/* ---------------- календарь ---------------- */
 
-async function loadDigest(kind) {
-  $("#digest-text").textContent = "Загружаю…";
+function fmtDay(iso) {
+  const d = new Date(iso + "T00:00:00");
+  if (isNaN(d)) return iso;
+  return d.toLocaleDateString("ru-RU", { weekday: "short", day: "numeric", month: "long" });
+}
+
+async function loadCalendar(days) {
+  const box = $("#calendar-body");
+  box.textContent = "Загружаю…";
   try {
-    const data = await api(`/api/digest?kind=${kind}`);
-    $("#digest-text").textContent = data.text;
+    const data = await api(`/api/calendar?days=${days}`);
+    box.innerHTML = "";
+    if (!data.configured) {
+      box.textContent = "Календарь не подключён: заполни GOOGLE_TOKEN_JSON в переменных сервиса.";
+      return;
+    }
+    if (!data.days.length) {
+      box.textContent = days > 0 ? "На неделе событий нет." : "Сегодня событий нет.";
+      return;
+    }
+    for (const day of data.days) {
+      const h = document.createElement("div");
+      h.className = "cal-day";
+      h.textContent = fmtDay(day.date);
+      box.append(h);
+      for (const ev of day.events) {
+        const line = document.createElement("div");
+        line.className = "cal-event";
+        const time = document.createElement("span");
+        time.className = "cal-time";
+        time.textContent = `${ev.emoji} ${ev.time}`;
+        const title = document.createElement("span");
+        title.textContent = ev.title;
+        line.append(time, title);
+        box.append(line);
+      }
+    }
   } catch (err) {
-    $("#digest-text").textContent = "Не удалось загрузить сводку.\n" + err.message;
+    box.textContent = "Не удалось загрузить календарь: " + err.message;
   }
 }
 
@@ -74,7 +106,7 @@ document.querySelectorAll(".seg-btn").forEach((btn) => {
   btn.addEventListener("click", () => {
     document.querySelectorAll(".seg-btn").forEach((b) => b.classList.remove("active"));
     btn.classList.add("active");
-    loadDigest(btn.dataset.digest);
+    loadCalendar(parseInt(btn.dataset.calDays, 10));
   });
 });
 
@@ -276,6 +308,28 @@ function renderRail() {
     sec.textContent = "Чаты";
     box.append(sec);
     OVERVIEW.chats.forEach((c) => box.append(railItem(c)));
+  }
+
+  // быстрое создание: один клик — новый чат нужного типа
+  const sec = document.createElement("div");
+  sec.className = "rail-section";
+  sec.textContent = "Новый чат";
+  box.append(sec);
+  for (const [mode, label] of Object.entries(OVERVIEW.modes)) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "rail-item quick-new";
+    btn.textContent = `＋ ${label}`;
+    btn.addEventListener("click", async () => {
+      try {
+        const chat = await api("/api/chats", { method: "POST",
+          body: JSON.stringify({ mode, project_id: null, title: "" }) });
+        await loadOverview(chat.id);
+      } catch (err) {
+        alert("Не удалось создать чат: " + err.message);
+      }
+    });
+    box.append(btn);
   }
 }
 
