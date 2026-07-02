@@ -16,6 +16,7 @@ import agent
 import config
 import digests
 import scheduler as scheduler_module
+import storage
 from services import notion
 
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -27,10 +28,19 @@ SESSION_MAX_AGE = 60 * 60 * 24 * 30  # 30 дней
 
 _signer = TimestampSigner(config.SECRET_KEY or "dev-only")
 
-# История чата держится в памяти процесса (один пользователь).
-# При рестарте начинается новый диалог — приемлемо для MVP.
-_chat_history: list[dict] = []
-MAX_HISTORY_MESSAGES = 40
+
+def _notion_hint(e: Exception) -> str:
+    """Человеческое объяснение типовых ошибок Notion."""
+    msg = str(e)
+    if "Could not find database" in msg or "object_not_found" in msg:
+        return ("База не найдена. Проверь ID в переменных окружения и что база "
+                "расшарена интеграции: открой базу в Notion → ⋯ → Connections → "
+                "добавь интеграцию бота.")
+    if "Unauthorized" in msg or "API token is invalid" in msg:
+        return "NOTION_TOKEN неверный или не задан."
+    if "is not a property that exists" in msg or "validation_error" in msg:
+        return f"Схема базы не совпадает с ожидаемой (см. README): {msg[:200]}"
+    return msg[:300]
 
 
 @asynccontextmanager
@@ -64,11 +74,8 @@ def _is_authed(request: Request) -> bool:
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
     path = request.url.path
-    open_paths = ("/api/login", "/static", "/", "/favicon.ico", "/healthz")
     if path.startswith("/api/") and path != "/api/login" and not _is_authed(request):
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
-    if path not in open_paths and not path.startswith(("/static", "/api")):
-        return JSONResponse({"error": "not found"}, status_code=404)
+        return JSONResponse({"detail": "unauthorized"}, status_code=401)
     return await call_next(request)
 
 
@@ -93,33 +100,68 @@ async def logout(response: Response):
 
 
 # ---------------------------------------------------------------------------
-# Рутина: дайджест, привычки, напоминания
+# Рутина: сводка, задачи, привычки, напоминания
 # ---------------------------------------------------------------------------
 
 @app.get("/api/digest")
 async def get_digest(kind: str = "morning"):
-    if kind == "evening":
-        text = await digests.build_evening_digest()
-    else:
-        text = await digests.build_morning_digest()
-    return {"kind": kind, "text": text}
+    try:
+        if kind == "evening":
+            text = await digests.build_evening_digest()
+        else:
+            text = await digests.build_morning_digest()
+        return {"kind": kind, "text": text}
+    except Exception as e:
+        logger.exception("Digest error")
+        raise HTTPException(status_code=502, detail=_notion_hint(e))
+
+
+@app.get("/api/tasks")
+async def get_tasks():
+    """Задачи для дашборда: просроченные / сегодня / остальные активные."""
+    try:
+        active = await notion.get_active_tasks()
+        overdue = await notion.get_overdue_tasks()
+    except Exception as e:
+        logger.exception("Tasks error")
+        raise HTTPException(status_code=502, detail=_notion_hint(e))
+    today = datetime.now(config.ROME_TZ).date().isoformat()
+    overdue_ids = {t["id"] for t in overdue}
+    today_tasks, other = [], []
+    for t in notion.sort_by_priority(active):
+        if t["id"] in overdue_ids:
+            continue
+        if t.get("deadline", "")[:10] == today:
+            today_tasks.append(t)
+        else:
+            other.append(t)
+    return {
+        "overdue": notion.sort_by_priority(overdue),
+        "today": today_tasks,
+        "other": other,
+    }
 
 
 @app.get("/api/habits")
 async def get_habits():
-    habits = await notion.get_habits()
-    entries = await notion.get_habit_log(days=60)
+    try:
+        habits = await notion.get_habits()
+        entries = await notion.get_habit_log(days=60)
+    except Exception as e:
+        logger.exception("Habits error")
+        raise HTTPException(status_code=502, detail=_notion_hint(e))
     today = datetime.now(config.ROME_TZ).date()
     today_iso = today.isoformat()
     done_today = {e["habit"] for e in entries if e["date"] == today_iso and e["done"]}
-    return {"date": today_iso, "habits": [
-        {
-            "name": h["name"],
-            "goal": h.get("goal", ""),
-            "done_today": h["name"] in done_today,
-            "streak": notion.habit_streak(entries, h["name"], today),
-        } for h in habits
-    ]}
+    return {"date": today_iso, "configured": bool(config.NOTION_HABITS_DB_ID),
+            "habits": [
+                {
+                    "name": h["name"],
+                    "goal": h.get("goal", ""),
+                    "done_today": h["name"] in done_today,
+                    "streak": notion.habit_streak(entries, h["name"], today),
+                } for h in habits
+            ]}
 
 
 class HabitLogBody(BaseModel):
@@ -131,13 +173,21 @@ class HabitLogBody(BaseModel):
 @app.post("/api/habits/log")
 async def post_habit_log(body: HabitLogBody):
     day = body.date or datetime.now(config.ROME_TZ).date().isoformat()
-    await notion.log_habit(body.habit_name, day, body.done)
+    try:
+        await notion.log_habit(body.habit_name, day, body.done)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=_notion_hint(e))
     return {"ok": True}
 
 
 @app.get("/api/reminders")
 async def get_reminders():
-    return {"reminders": await notion.get_pending_reminders()}
+    try:
+        return {"configured": bool(config.NOTION_REMINDERS_DB_ID),
+                "reminders": await notion.get_pending_reminders()}
+    except Exception as e:
+        logger.exception("Reminders error")
+        raise HTTPException(status_code=502, detail=_notion_hint(e))
 
 
 class ReminderBody(BaseModel):
@@ -147,40 +197,102 @@ class ReminderBody(BaseModel):
 
 @app.post("/api/reminders")
 async def post_reminder(body: ReminderBody):
-    await notion.create_reminder(body.text, body.when)
+    if not config.NOTION_REMINDERS_DB_ID:
+        raise HTTPException(status_code=400,
+                            detail="База «Напоминания» не настроена (NOTION_REMINDERS_DB_ID).")
+    try:
+        await notion.create_reminder(body.text, body.when)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=_notion_hint(e))
     return {"ok": True}
 
 
 # ---------------------------------------------------------------------------
-# Аналитика: чат с агентом (ресерч, переводы, совет директоров, анализ)
+# Аналитика: проекты и чаты
 # ---------------------------------------------------------------------------
 
-class ChatBody(BaseModel):
+@app.get("/api/overview")
+async def get_overview():
+    data = await storage.overview()
+    data["modes"] = storage.CHAT_MODES
+    return data
+
+
+class ProjectBody(BaseModel):
+    name: str
+    description: str = ""
+
+
+@app.post("/api/projects")
+async def post_project(body: ProjectBody):
+    if not body.name.strip():
+        raise HTTPException(status_code=400, detail="Название проекта пустое")
+    return await storage.create_project(body.name.strip(), body.description.strip())
+
+
+class ChatCreateBody(BaseModel):
+    mode: str
+    project_id: str | None = None
+    title: str = ""
+
+
+@app.post("/api/chats")
+async def post_chat(body: ChatCreateBody):
+    if body.mode not in storage.CHAT_MODES:
+        raise HTTPException(status_code=400, detail=f"Неизвестный режим: {body.mode}")
+    title = body.title.strip() or storage.CHAT_MODES[body.mode].split(" ", 1)[1]
+    return await storage.create_chat(body.mode, body.project_id, title)
+
+
+@app.get("/api/chats/{chat_id}")
+async def get_chat(chat_id: str):
+    chat = await storage.get_chat(chat_id)
+    if not chat:
+        raise HTTPException(status_code=404, detail="Чат не найден")
+    chat["messages"] = await storage.get_messages(chat_id)
+    return chat
+
+
+@app.delete("/api/chats/{chat_id}")
+async def delete_chat(chat_id: str):
+    await storage.delete_chat(chat_id)
+    return {"ok": True}
+
+
+class MessageBody(BaseModel):
     message: str
 
 
-@app.post("/api/chat")
-async def chat(body: ChatBody):
-    global _chat_history
-    _chat_history.append({"role": "user", "content": body.message})
+@app.post("/api/chats/{chat_id}/messages")
+async def post_message(chat_id: str, body: MessageBody):
+    chat = await storage.get_chat(chat_id)
+    if not chat:
+        raise HTTPException(status_code=404, detail="Чат не найден")
+
+    history = await storage.get_messages(chat_id)
+    api_messages = ([{"role": m["role"], "content": m["content"]} for m in history]
+                    + [{"role": "user", "content": body.message}])
     try:
-        reply = await agent.run_agent(_chat_history)
+        reply = await agent.run_chat(
+            chat["mode"], api_messages,
+            project_name=chat.get("project_name"),
+            project_desc=chat.get("project_description"),
+        )
     except Exception as e:
         logger.exception("Agent error")
-        _chat_history.pop()  # не оставляем безответный ход в истории
         raise HTTPException(status_code=502, detail=f"Ошибка агента: {e}")
-    _chat_history.append({"role": "assistant", "content": reply})
-    if len(_chat_history) > MAX_HISTORY_MESSAGES:
-        _chat_history = _chat_history[-MAX_HISTORY_MESSAGES:]
-        if _chat_history and _chat_history[0]["role"] != "user":
-            _chat_history = _chat_history[1:]
+
+    await storage.add_message(chat_id, "user", body.message)
+    await storage.add_message(chat_id, "assistant", reply)
+
+    # первому сообщению — имя чата (если оно стандартное)
+    default_titles = {v.split(" ", 1)[1] for v in storage.CHAT_MODES.values()}
+    if not history and chat["title"] in default_titles and chat["mode"] != "translator":
+        new_title = body.message.strip().replace("\n", " ")[:42]
+        if new_title:
+            await storage.rename_chat(chat_id, new_title)
+
     return {"reply": reply}
-
-
-@app.post("/api/chat/reset")
-async def chat_reset():
-    _chat_history.clear()
-    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------
