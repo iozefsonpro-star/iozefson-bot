@@ -1,0 +1,118 @@
+:root{
+  --paper:#F2F3F0;
+  --card:#FFFFFF;
+  --ink:#1C2830;
+  --ink-soft:#54626C;
+  --ink-faint:#8A949C;
+  --petrol:#0E5A6B;
+  --petrol-deep:#0A424F;
+  --petrol-wash:#E4EEEF;
+  --line:#DFE2DC;
+  --good:#2E7D5B;
+  --danger:#A8402F;
+  --radius:6px;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;
+  --serif:"Palatino Linotype",Palatino,"Book Antiqua",Georgia,serif;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);
+     font-size:15px;line-height:1.5}
+.hidden{display:none !important}
+button{font-family:inherit;cursor:pointer}
+input,textarea{font-family:inherit;font-size:14px}
+:focus-visible{outline:2px solid var(--petrol);outline-offset:2px}
+
+/* ---------- login ---------- */
+.login-screen{min-height:100vh;display:flex;align-items:center;justify-content:center;
+              background:var(--petrol-deep)}
+.login-card{background:var(--card);padding:40px 44px;border-radius:8px;width:320px;
+            display:flex;flex-direction:column;gap:12px;text-align:center;
+            box-shadow:0 20px 60px rgba(0,0,0,.35)}
+.login-mark{font-family:var(--serif);font-size:40px;font-weight:700;color:var(--petrol)}
+.login-card h1{font-family:var(--serif);margin:0;font-size:26px}
+.login-sub{margin:0 0 8px;color:var(--ink-faint);font-size:13px}
+.login-card input{padding:11px 14px;border:1px solid var(--line);border-radius:var(--radius)}
+.login-card button{padding:11px;background:var(--petrol);color:#fff;border:none;
+                   border-radius:var(--radius);font-size:15px}
+.login-card button:hover{background:var(--petrol-deep)}
+.login-error{color:var(--danger);font-size:13px;margin:0}
+
+/* ---------- shell ---------- */
+.topbar{display:flex;align-items:center;justify-content:space-between;
+        padding:14px 22px;background:var(--card);border-bottom:1px solid var(--line)}
+.brand{font-family:var(--serif);font-size:19px;font-weight:600;display:flex;
+       align-items:center;gap:10px}
+.brand-mark{color:var(--petrol);font-weight:700}
+.topbar-date{font-family:var(--sans);font-size:13px;color:var(--ink-faint);font-weight:400}
+.ghost-btn{background:none;border:1px solid var(--line);border-radius:var(--radius);
+           padding:6px 12px;font-size:13px;color:var(--ink-soft)}
+.ghost-btn:hover{border-color:var(--petrol);color:var(--petrol)}
+
+.layout{display:grid;grid-template-columns:minmax(340px,460px) 1fr;gap:20px;
+        padding:20px 22px;max-width:1500px;margin:0 auto;align-items:start}
+@media(max-width:900px){.layout{grid-template-columns:1fr}}
+.col{display:flex;flex-direction:column;gap:20px}
+
+/* ---------- cards ---------- */
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+      padding:18px 20px}
+.card-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+.card-head h2{font-family:var(--serif);font-size:18px;margin:0}
+.card-note{font-size:12px;color:var(--ink-faint)}
+.empty{color:var(--ink-faint);font-size:14px;margin:4px 0}
+
+/* сводка */
+.seg{display:flex;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+.seg-btn{border:none;background:none;padding:5px 14px;font-size:13px;color:var(--ink-soft)}
+.seg-btn.active{background:var(--petrol);color:#fff}
+.digest{white-space:pre-wrap;font-family:var(--sans);font-size:14px;line-height:1.6;
+        margin:0;max-height:420px;overflow-y:auto}
+
+/* привычки */
+.habits{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:6px}
+.habit{display:flex;align-items:center;gap:12px;padding:9px 12px;border:1px solid var(--line);
+       border-radius:var(--radius);background:#FBFBF9}
+.habit input[type=checkbox]{width:19px;height:19px;accent-color:var(--good);flex:none}
+.habit .h-name{flex:1}
+.habit .h-streak{font-size:12px;color:var(--ink-faint);white-space:nowrap;
+                 font-variant-numeric:tabular-nums}
+.habit.done .h-name{color:var(--ink-faint);text-decoration:line-through}
+
+/* напоминания */
+.reminders{list-style:none;padding:0;margin:0 0 12px;display:flex;flex-direction:column;gap:6px}
+.reminder{display:flex;gap:12px;font-size:14px;padding:7px 12px;background:var(--petrol-wash);
+          border-radius:var(--radius)}
+.reminder .r-when{font-variant-numeric:tabular-nums;color:var(--petrol-deep);
+                  white-space:nowrap;font-size:13px;padding-top:1px}
+.reminder-form{display:grid;grid-template-columns:1fr auto auto;gap:8px}
+@media(max-width:520px){.reminder-form{grid-template-columns:1fr}}
+.reminder-form input{padding:8px 10px;border:1px solid var(--line);border-radius:var(--radius)}
+.reminder-form button{padding:8px 14px;background:var(--petrol);color:#fff;border:none;
+                      border-radius:var(--radius)}
+
+/* ---------- чат ---------- */
+.chat-card{display:flex;flex-direction:column;min-height:70vh}
+.quick-actions{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+.qa{border:1px solid var(--line);background:#FBFBF9;border-radius:20px;padding:6px 14px;
+    font-size:13px;color:var(--ink-soft)}
+.qa:hover{border-color:var(--petrol);color:var(--petrol-deep);background:var(--petrol-wash)}
+.chat-log{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:12px;
+          padding:4px 2px;min-height:280px}
+.msg{max-width:88%;padding:11px 15px;border-radius:10px;white-space:pre-wrap;
+     font-size:14.5px;line-height:1.55;overflow-wrap:break-word}
+.msg.user{align-self:flex-end;background:var(--petrol);color:#fff;border-bottom-right-radius:3px}
+.msg.assistant{align-self:flex-start;background:var(--petrol-wash);color:var(--ink);
+               border-bottom-left-radius:3px}
+.msg.thinking{align-self:flex-start;color:var(--ink-faint);background:none;font-style:italic}
+.msg.error{align-self:flex-start;background:#F6E4E0;color:var(--danger)}
+.chat-form{display:flex;gap:8px;margin-top:12px}
+.chat-form textarea{flex:1;resize:vertical;padding:10px 13px;border:1px solid var(--line);
+                    border-radius:var(--radius);min-height:44px;max-height:180px}
+.chat-form button{width:48px;border:none;background:var(--petrol);color:#fff;
+                  border-radius:var(--radius);font-size:17px}
+.chat-form button:disabled{background:var(--ink-faint)}
+
+@media (prefers-reduced-motion:no-preference){
+  .msg{animation:rise .18s ease-out}
+  @keyframes rise{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+}
