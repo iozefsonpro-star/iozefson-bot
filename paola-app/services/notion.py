@@ -110,6 +110,21 @@ async def reschedule_task(page_id: str, new_date: str) -> None:
                               properties={"Дедлайн": {"date": {"start": new_date}}})
 
 
+async def get_done_between(start_iso: str, end_iso: str) -> list[dict]:
+    """Задачи со статусом Done, отредактированные в интервале дат (прокси даты закрытия)."""
+    pages = await _query_all(
+        config.NOTION_TODOLIST_DB_ID,
+        filter={"and": [
+            {"property": "Статус", "select": {"equals": "Done"}},
+            {"timestamp": "last_edited_time",
+             "last_edited_time": {"on_or_after": start_iso}},
+            {"timestamp": "last_edited_time",
+             "last_edited_time": {"on_or_before": end_iso}},
+        ]},
+    )
+    return [t for p in pages if (t := parse_task(p))["title"]]
+
+
 # ---------------------------------------------------------------------------
 # Привычки: база «Привычки» + база «Журнал привычек»
 # Схемы описаны в README (создаются один раз вручную).

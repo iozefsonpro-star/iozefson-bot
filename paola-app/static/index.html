@@ -2,8 +2,17 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Паола — ассистент</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#E9EDF1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Паола">
+<title>Паола</title>
+<link rel="manifest" href="/static/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;600&family=Golos+Text:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -11,9 +20,9 @@
 <!-- Экран входа -->
 <div id="login-screen" class="login-screen hidden">
   <form id="login-form" class="login-card">
-    <div class="login-mark">P.</div>
+    <div class="orb orb-lg" aria-hidden="true">П</div>
     <h1>Паола</h1>
-    <p class="login-sub">рутина + аналитика</p>
+    <p class="login-sub">персональный ассистент</p>
     <input type="password" id="login-password" placeholder="Пароль" autocomplete="current-password" required>
     <button type="submit">Войти</button>
     <p id="login-error" class="login-error hidden">Неверный пароль</p>
@@ -22,83 +31,120 @@
 
 <!-- Приложение -->
 <div id="app" class="app hidden">
-  <header class="topbar">
-    <div class="brand"><span class="brand-mark">P.</span> Паола <span id="today-date" class="topbar-date"></span></div>
-    <button id="logout-btn" class="ghost-btn" type="button">Выйти</button>
-  </header>
 
-  <main class="layout">
-
-    <!-- ЛЕВАЯ КОЛОНКА: РУТИНА -->
-    <section class="col routine">
-      <div class="card">
-        <div class="card-head">
-          <h2>Календарь</h2>
-          <div class="seg">
-            <button class="seg-btn active" data-cal-days="0" type="button">Сегодня</button>
-            <button class="seg-btn" data-cal-days="7" type="button">Неделя</button>
-          </div>
-        </div>
-        <div id="calendar-body">Загружаю…</div>
+  <!-- ===== ГЛАВНАЯ ===== -->
+  <section id="view-home" class="view">
+    <div class="home-head">
+      <div>
+        <div id="home-meta" class="meta-label"></div>
+        <h1 id="home-greeting" class="greeting">Доброе утро,<br>Юлия</h1>
       </div>
+      <button id="logout-btn" class="ghost-btn" type="button">Выйти</button>
+    </div>
 
-      <div class="card">
-        <div class="card-head"><h2>Задачи</h2><button id="tasks-refresh" class="ghost-btn" type="button">Обновить</button></div>
-        <div id="tasks-body">Загружаю…</div>
+    <div id="nudge-card" class="nudge hidden">
+      <div class="nudge-head">
+        <span class="orb orb-sm" aria-hidden="true">П</span>
+        <span class="nudge-who">Паола · на связи</span>
       </div>
-
-      <div class="card">
-        <div class="card-head"><h2>Привычки</h2><span id="habits-date" class="card-note"></span></div>
-        <ul id="habits-list" class="habits"></ul>
-        <p id="habits-empty" class="empty hidden"></p>
+      <p id="nudge-text" class="nudge-text"></p>
+      <div class="nudge-actions">
+        <button id="nudge-go" class="pill pill-solid" type="button">Давай разберём</button>
+        <button id="nudge-later" class="pill pill-ghost" type="button">Позже</button>
       </div>
+    </div>
 
-      <div class="card">
-        <div class="card-head"><h2>Напоминания</h2></div>
-        <ul id="reminders-list" class="reminders"></ul>
-        <p id="reminders-empty" class="empty hidden"></p>
-        <form id="reminder-form" class="reminder-form">
-          <input type="text" id="reminder-text" placeholder="О чём напомнить" required>
-          <input type="datetime-local" id="reminder-when" required>
-          <button type="submit">Создать</button>
-        </form>
-      </div>
-    </section>
-
-    <!-- ПРАВАЯ КОЛОНКА: АНАЛИТИКА -->
-    <section class="col analytics">
-      <div class="card chat-card">
-        <div class="chat-shell">
-
-          <aside class="chat-rail">
-            <div class="rail-head">
-              <span>Диалоги</span>
-              <button id="new-chat-btn" class="ghost-btn" type="button" title="Новый чат">＋ чат</button>
-            </div>
-            <div id="rail-list" class="rail-list"></div>
-            <button id="new-project-btn" class="rail-project-btn" type="button">＋ проект</button>
-          </aside>
-
-          <div class="chat-pane">
-            <div class="chat-pane-head">
-              <div>
-                <div id="chat-title" class="chat-title">—</div>
-                <div id="chat-mode" class="chat-mode"></div>
-              </div>
-              <button id="chat-delete" class="ghost-btn danger" type="button">Удалить чат</button>
-            </div>
-            <div id="chat-log" class="chat-log"></div>
-            <form id="chat-form" class="chat-form">
-              <textarea id="chat-input" rows="2" placeholder="Напиши…" required></textarea>
-              <button type="submit" id="chat-send">➤</button>
-            </form>
-          </div>
-
+    <div class="section">
+      <div class="section-head">
+        <h2>Сегодня</h2>
+        <div class="seg">
+          <button class="seg-btn active" data-cal-days="0" type="button">День</button>
+          <button class="seg-btn" data-cal-days="7" type="button">Неделя</button>
         </div>
       </div>
-    </section>
+      <div id="calendar-body" class="soft-card">Загружаю…</div>
+    </div>
 
-  </main>
+    <div class="section">
+      <div class="section-head"><h2>Задачи</h2><span id="tasks-meta" class="meta-label"></span></div>
+      <div id="tasks-body">Загружаю…</div>
+    </div>
+
+    <div class="section">
+      <div class="section-head"><h2>Привычки</h2><span id="habits-date" class="meta-label"></span></div>
+      <ul id="habits-list" class="habits"></ul>
+      <p id="habits-empty" class="empty hidden"></p>
+    </div>
+
+    <div class="section">
+      <div class="section-head"><h2>Напоминания</h2></div>
+      <ul id="reminders-list" class="reminders"></ul>
+      <p id="reminders-empty" class="empty hidden"></p>
+      <form id="reminder-form" class="reminder-form">
+        <input type="text" id="reminder-text" placeholder="О чём напомнить" required>
+        <input type="datetime-local" id="reminder-when" required>
+        <button type="submit" class="pill pill-solid">Создать</button>
+      </form>
+    </div>
+
+    <button id="ask-paola" class="ask-bar" type="button">
+      <span class="orb orb-xs" aria-hidden="true">П</span>
+      <span class="ask-hint">Спросить Паолу…</span>
+      <span class="ask-arrow">↑</span>
+    </button>
+  </section>
+
+  <!-- ===== ЧАТ ===== -->
+  <section id="view-chat" class="view hidden">
+    <div class="chat-head">
+      <span class="orb orb-md" aria-hidden="true">П</span>
+      <div class="chat-head-txt">
+        <div class="chat-head-name">Паола</div>
+        <div id="chat-status" class="chat-head-status">на связи</div>
+      </div>
+      <button id="chat-delete" class="ghost-btn" type="button" title="Удалить чат">🗑</button>
+    </div>
+    <div id="chat-chips" class="chips"></div>
+    <div id="chat-log" class="chat-log"></div>
+    <form id="chat-form" class="chat-input">
+      <textarea id="chat-input" rows="1" placeholder="Напишите Паоле…" required></textarea>
+      <button type="submit" id="chat-send" aria-label="Отправить">↑</button>
+    </form>
+  </section>
+
+  <!-- ===== ПРОЕКТЫ ===== -->
+  <section id="view-projects" class="view hidden">
+    <div class="section-head view-title">
+      <h2>Проекты</h2>
+      <button id="new-project-btn" class="pill pill-ghost" type="button">＋ проект</button>
+    </div>
+    <div id="projects-list" class="projects"></div>
+    <p id="projects-empty" class="empty hidden">Проектов пока нет. Создай папку под клиента — чаты внутри получат его контекст автоматически.</p>
+  </section>
+
+  <!-- ===== АНАЛИТИКА ===== -->
+  <section id="view-analytics" class="view hidden">
+    <div class="section-head view-title"><h2>Аналитика</h2></div>
+    <div class="week-nav">
+      <button id="week-prev" class="ghost-btn" type="button">◀</button>
+      <span id="week-label" class="meta-label"></span>
+      <button id="week-next" class="ghost-btn" type="button">▶</button>
+    </div>
+    <div id="analytics-body">Загружаю…</div>
+    <button id="recommend-btn" class="pill pill-solid" type="button">Рекомендации Паолы</button>
+    <div id="recommend-box" class="nudge hidden">
+      <div class="nudge-head"><span class="orb orb-sm">П</span><span class="nudge-who">Паола · итоги недели</span></div>
+      <p id="recommend-text" class="nudge-text"></p>
+    </div>
+  </section>
+
+  <!-- ===== НИЖНЯЯ НАВИГАЦИЯ ===== -->
+  <nav class="tabbar" aria-label="Основная навигация">
+    <button class="tab active" data-view="home" type="button"><span class="tab-ico">⌂</span>Дом</button>
+    <button class="tab" data-view="chat" type="button"><span class="tab-ico">✎</span>Чат</button>
+    <button class="tab" data-view="projects" type="button"><span class="tab-ico">▤</span>Проекты</button>
+    <button class="tab" data-view="analytics" type="button"><span class="tab-ico">◔</span>Аналитика</button>
+  </nav>
 </div>
 
 <!-- Диалог: новый чат -->
@@ -115,8 +161,8 @@
       <input type="text" id="dlg-chat-title" placeholder="Например: Ресерч рынка упаковки">
     </label>
     <div class="dlg-actions">
-      <button value="cancel" class="ghost-btn" formnovalidate>Отмена</button>
-      <button value="ok" id="dlg-chat-ok">Создать</button>
+      <button value="cancel" class="pill pill-ghost" formnovalidate>Отмена</button>
+      <button value="ok" class="pill pill-solid">Создать</button>
     </div>
   </form>
 </dialog>
@@ -129,11 +175,11 @@
       <input type="text" id="dlg-project-name" placeholder="Например: Клиент Rossi Srl" required>
     </label>
     <label>Контекст для Паолы (необязательно)
-      <textarea id="dlg-project-desc" rows="3" placeholder="Чем занимается клиент, что анализируем, цель проекта…"></textarea>
+      <textarea id="dlg-project-desc" rows="3" placeholder="Чем занимается клиент, что анализируем, цель…"></textarea>
     </label>
     <div class="dlg-actions">
-      <button value="cancel" class="ghost-btn" formnovalidate>Отмена</button>
-      <button value="ok" id="dlg-project-ok">Создать</button>
+      <button value="cancel" class="pill pill-ghost" formnovalidate>Отмена</button>
+      <button value="ok" class="pill pill-solid">Создать</button>
     </div>
   </form>
 </dialog>

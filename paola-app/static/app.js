@@ -1,10 +1,14 @@
-/* Паола App — фронтенд без сборки: fetch + vanilla JS */
+/* Паола App — фронтенд без сборки: fetch + vanilla JS. Редизайн «Небо». */
 "use strict";
 
 const $ = (sel) => document.querySelector(sel);
+const $$ = (sel) => document.querySelectorAll(sel);
 
 let OVERVIEW = { projects: [], chats: [], modes: {} };
-let CURRENT_CHAT = null; // {id, mode, title, ...}
+let CURRENT_CHAT = null;
+let CHIPS_CTX = { type: "standalone" };   // или {type:"project", id}
+let WEEK_OFFSET = 0;
+let TASKS_CACHE = null;
 
 async function api(path, opts = {}) {
   const resp = await fetch(path, {
@@ -21,7 +25,25 @@ async function api(path, opts = {}) {
   return resp.json();
 }
 
-/* ---------------- вход ---------------- */
+/* ---------------- мини-markdown для ответов Паолы ---------------- */
+
+function esc(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function renderMd(text) {
+  let t = esc(text);
+  t = t.replace(/```([\s\S]*?)```/g, (_, c) => `<code>${c.trim()}</code>`);
+  t = t.replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>");
+  t = t.replace(/(^|\s)\*([^*\n]+)\*(?=\s|[.,;:!?)]|$)/g, "$1<i>$2</i>");
+  t = t.replace(/`([^`\n]+)`/g, "<code>$1</code>");
+  t = t.replace(/(https?:\/\/[^\s<)]+)/g,
+    '<a href="$1" target="_blank" rel="noopener">$1</a>');
+  t = t.replace(/^[-•]\s+/gm, "• ");
+  return t;
+}
+
+/* ---------------- вход / выход ---------------- */
 
 function showLogin() {
   $("#login-screen").classList.remove("hidden");
@@ -31,13 +53,19 @@ function showLogin() {
 function showApp() {
   $("#login-screen").classList.add("hidden");
   $("#app").classList.remove("hidden");
-  $("#today-date").textContent = new Date().toLocaleDateString("ru-RU",
+  const now = new Date();
+  $("#home-meta").textContent = now.toLocaleDateString("ru-RU",
     { weekday: "long", day: "numeric", month: "long" });
+  const h = now.getHours();
+  const word = h < 5 ? "Доброй ночи" : h < 12 ? "Доброе утро"
+             : h < 18 ? "Добрый день" : "Добрый вечер";
+  $("#home-greeting").innerHTML = `${word},<br>Юлия`;
   loadCalendar(0);
   loadTasks();
   loadHabits();
   loadReminders();
   loadOverview();
+  loadAnalytics();
 }
 
 $("#login-form").addEventListener("submit", async (e) => {
@@ -56,6 +84,26 @@ $("#login-form").addEventListener("submit", async (e) => {
 $("#logout-btn").addEventListener("click", async () => {
   try { await api("/api/logout", { method: "POST" }); } catch (_) {}
   showLogin();
+});
+
+/* ---------------- навигация по вкладкам ---------------- */
+
+function switchView(name) {
+  ["home", "chat", "projects", "analytics"].forEach((v) => {
+    $(`#view-${v}`).classList.toggle("hidden", v !== name);
+  });
+  $$(".tab").forEach((t) => t.classList.toggle("active", t.dataset.view === name));
+  if (name === "chat" && !CURRENT_CHAT) openDefaultChat();
+  if (name === "analytics") loadAnalytics();
+  window.scrollTo(0, 0);
+}
+
+$$(".tab").forEach((t) => t.addEventListener("click", () => switchView(t.dataset.view)));
+
+$("#ask-paola").addEventListener("click", async () => {
+  switchView("chat");
+  await openDefaultChat();
+  $("#chat-input").focus();
 });
 
 /* ---------------- календарь ---------------- */
@@ -77,14 +125,18 @@ async function loadCalendar(days) {
       return;
     }
     if (!data.days.length) {
-      box.textContent = days > 0 ? "На неделе событий нет." : "Сегодня событий нет.";
+      box.textContent = days > 0
+        ? "На неделе событий нет — окно для глубокой работы."
+        : "Сегодня встреч нет — день можно отдать фокусу.";
       return;
     }
     for (const day of data.days) {
-      const h = document.createElement("div");
-      h.className = "cal-day";
-      h.textContent = fmtDay(day.date);
-      box.append(h);
+      if (days > 0) {
+        const h = document.createElement("div");
+        h.className = "cal-day";
+        h.textContent = fmtDay(day.date);
+        box.append(h);
+      }
       for (const ev of day.events) {
         const line = document.createElement("div");
         line.className = "cal-event";
@@ -102,28 +154,37 @@ async function loadCalendar(days) {
   }
 }
 
-document.querySelectorAll(".seg-btn").forEach((btn) => {
+$$(".seg-btn").forEach((btn) => {
   btn.addEventListener("click", () => {
-    document.querySelectorAll(".seg-btn").forEach((b) => b.classList.remove("active"));
+    $$(".seg-btn").forEach((b) => b.classList.remove("active"));
     btn.classList.add("active");
     loadCalendar(parseInt(btn.dataset.calDays, 10));
   });
 });
 
-/* ---------------- задачи ---------------- */
+/* ---------------- задачи + карточка-инициатива ---------------- */
 
-function taskLi(t) {
+function taskLi(t, overdue) {
   const li = document.createElement("li");
   li.className = "task";
-  const icon = { "❗ Важное": "🔴", "✅ Обычное": "🟢", "🔜 Когда-нибудь": "⚪" }[t.priority] || "⚪";
+  const dot = document.createElement("span");
+  dot.className = "t-dot";
   const title = document.createElement("span");
   title.className = "t-title";
-  title.textContent = `${icon} ${t.title}`;
-  const meta = document.createElement("span");
-  meta.className = "t-meta";
-  meta.textContent = [t.deadline ? t.deadline.slice(0, 10) : "", t.zone]
-    .filter(Boolean).join(" · ");
-  li.append(title, meta);
+  title.textContent = t.title;
+  li.append(dot, title);
+  if (t.deadline) {
+    const d = document.createElement("span");
+    d.className = "t-date";
+    d.textContent = t.deadline.slice(5, 10);
+    li.append(d);
+  }
+  if (t.zone) {
+    const tag = document.createElement("span");
+    tag.className = "t-tag";
+    tag.textContent = t.zone.replace(/^[^\s]+\s/, "");
+    li.append(tag);
+  }
   return li;
 }
 
@@ -132,7 +193,7 @@ function taskGroup(label, tasks, cls) {
   const div = document.createElement("div");
   div.className = "task-group" + (cls ? " " + cls : "");
   const h = document.createElement("h3");
-  h.textContent = `${label} (${tasks.length})`;
+  h.textContent = `${label} · ${tasks.length}`;
   const ul = document.createElement("ul");
   ul.className = "task-list";
   tasks.forEach((t) => ul.append(taskLi(t)));
@@ -140,28 +201,66 @@ function taskGroup(label, tasks, cls) {
   return div;
 }
 
+function renderNudge() {
+  const card = $("#nudge-card");
+  if (!TASKS_CACHE) { card.classList.add("hidden"); return; }
+  const today = new Date().toISOString().slice(0, 10);
+  if (localStorage.getItem("paola_nudge_dismissed") === today) {
+    card.classList.add("hidden");
+    return;
+  }
+  const n = TASKS_CACHE.overdue.length;
+  const txt = $("#nudge-text");
+  if (n > 0) {
+    txt.innerHTML = `У тебя <b>${n} просроченных задач</b>. Разберём их за 10 минут — предложу по каждой: закрыть, перенести или отпустить.`;
+    $("#nudge-go").textContent = "Давай разберём";
+  } else if (TASKS_CACHE.today.length > 0) {
+    txt.innerHTML = `Просроченного нет. На сегодня <b>${TASKS_CACHE.today.length} задач</b> — помочь расставить порядок?`;
+    $("#nudge-go").textContent = "Помоги с планом";
+  } else {
+    card.classList.add("hidden");
+    return;
+  }
+  card.classList.remove("hidden");
+}
+
+$("#nudge-later").addEventListener("click", () => {
+  localStorage.setItem("paola_nudge_dismissed", new Date().toISOString().slice(0, 10));
+  $("#nudge-card").classList.add("hidden");
+});
+
+$("#nudge-go").addEventListener("click", async () => {
+  const overdue = TASKS_CACHE ? TASKS_CACHE.overdue.length : 0;
+  const msg = overdue > 0
+    ? "Давай разберём мои просроченные задачи: покажи их и по каждой предложи — закрыть, перенести (на какую дату) или отпустить. Пойдём по одной."
+    : "Помоги расставить приоритеты в задачах на сегодня: что делать первым и почему.";
+  switchView("chat");
+  await openDefaultChat();
+  await sendChatMessage(msg);
+});
+
 async function loadTasks() {
   const box = $("#tasks-body");
   box.textContent = "Загружаю…";
   try {
     const data = await api("/api/tasks");
+    TASKS_CACHE = data;
     box.innerHTML = "";
+    $("#tasks-meta").textContent =
+      `${data.overdue.length + data.today.length + data.other.length} активных`;
     const groups = [
-      taskGroup("⚠️ Просрочено", data.overdue, "overdue"),
+      taskGroup("Просрочено", data.overdue, "overdue"),
       taskGroup("Сегодня", data.today, ""),
-      taskGroup("Остальные активные", data.other, ""),
+      taskGroup("Остальные", data.other, ""),
     ].filter(Boolean);
-    if (!groups.length) {
-      box.textContent = "Активных задач нет.";
-    } else {
-      groups.forEach((g) => box.append(g));
-    }
+    if (!groups.length) box.innerHTML = '<div class="soft-card">Активных задач нет — красота.</div>';
+    else groups.forEach((g) => box.append(g));
+    renderNudge();
   } catch (err) {
     box.textContent = "Ошибка загрузки задач: " + err.message;
+    TASKS_CACHE = null;
   }
 }
-
-$("#tasks-refresh").addEventListener("click", loadTasks);
 
 /* ---------------- привычки ---------------- */
 
@@ -204,7 +303,7 @@ async function loadHabits() {
       name.textContent = h.name;
       const streak = document.createElement("span");
       streak.className = "h-streak";
-      streak.textContent = h.streak > 0 ? `🔥 ${h.streak} дн.` : "";
+      streak.textContent = h.streak > 0 ? `${h.streak} дн.` : "";
       li.append(cb, name, streak);
       list.append(li);
     }
@@ -270,96 +369,111 @@ $("#reminder-form").addEventListener("submit", async (e) => {
   }
 });
 
-/* ---------------- диалоги: рельса ---------------- */
-
-function railItem(chat) {
-  const btn = document.createElement("button");
-  btn.type = "button";
-  btn.className = "rail-item" + (CURRENT_CHAT && CURRENT_CHAT.id === chat.id ? " active" : "");
-  const modeIcon = (OVERVIEW.modes[chat.mode] || "").split(" ")[0];
-  btn.textContent = `${modeIcon} ${chat.title}`;
-  btn.addEventListener("click", () => openChat(chat.id));
-  return btn;
-}
-
-function renderRail() {
-  const box = $("#rail-list");
-  box.innerHTML = "";
-
-  for (const p of OVERVIEW.projects) {
-    const sec = document.createElement("div");
-    sec.className = "rail-section";
-    const name = document.createElement("span");
-    name.textContent = `📁 ${p.name}`;
-    const add = document.createElement("button");
-    add.type = "button";
-    add.className = "mini-btn";
-    add.textContent = "＋";
-    add.title = `Новый чат в проекте «${p.name}»`;
-    add.addEventListener("click", () => openChatDialog(p.id));
-    sec.append(name, add);
-    box.append(sec);
-    p.chats.forEach((c) => box.append(railItem(c)));
-  }
-
-  if (OVERVIEW.chats.length) {
-    const sec = document.createElement("div");
-    sec.className = "rail-section";
-    sec.textContent = "Чаты";
-    box.append(sec);
-    OVERVIEW.chats.forEach((c) => box.append(railItem(c)));
-  }
-
-  // быстрое создание: один клик — новый чат нужного типа
-  const sec = document.createElement("div");
-  sec.className = "rail-section";
-  sec.textContent = "Новый чат";
-  box.append(sec);
-  for (const [mode, label] of Object.entries(OVERVIEW.modes)) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "rail-item quick-new";
-    btn.textContent = `＋ ${label}`;
-    btn.addEventListener("click", async () => {
-      try {
-        const chat = await api("/api/chats", { method: "POST",
-          body: JSON.stringify({ mode, project_id: null, title: "" }) });
-        await loadOverview(chat.id);
-      } catch (err) {
-        alert("Не удалось создать чат: " + err.message);
-      }
-    });
-    box.append(btn);
-  }
-}
+/* ---------------- обзор чатов ---------------- */
 
 async function loadOverview(selectChatId) {
   OVERVIEW = await api("/api/overview");
-  renderRail();
-  const wanted = selectChatId || localStorage.getItem("paola_chat");
-  const all = [...OVERVIEW.chats, ...OVERVIEW.projects.flatMap((p) => p.chats)];
-  const target = all.find((c) => c.id === wanted) || all[0];
-  if (target && (!CURRENT_CHAT || CURRENT_CHAT.id !== target.id || selectChatId)) {
-    await openChat(target.id);
-  }
+  renderChips();
+  renderProjects();
+  if (selectChatId) await openChat(selectChatId);
 }
 
-/* ---------------- диалоги: чат ---------------- */
+function chatsInContext() {
+  if (CHIPS_CTX.type === "project") {
+    const p = OVERVIEW.projects.find((x) => x.id === CHIPS_CTX.id);
+    return p ? p.chats : [];
+  }
+  return OVERVIEW.chats;
+}
 
-function addMsg(cls, text) {
+function renderChips() {
+  const box = $("#chat-chips");
+  box.innerHTML = "";
+  if (CHIPS_CTX.type === "project") {
+    const p = OVERVIEW.projects.find((x) => x.id === CHIPS_CTX.id);
+    const back = document.createElement("button");
+    back.type = "button";
+    back.className = "chip";
+    back.textContent = "← чаты";
+    back.addEventListener("click", () => {
+      CHIPS_CTX = { type: "standalone" };
+      renderChips();
+    });
+    box.append(back);
+    if (p) {
+      const label = document.createElement("button");
+      label.type = "button";
+      label.className = "chip active";
+      label.textContent = `📁 ${p.name}`;
+      box.append(label);
+    }
+  }
+  for (const c of chatsInContext()) {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "chip" + (CURRENT_CHAT && CURRENT_CHAT.id === c.id ? " active" : "");
+    const icon = (OVERVIEW.modes[c.mode] || "").split(" ")[0];
+    chip.textContent = `${icon} ${c.title}`;
+    chip.addEventListener("click", () => openChat(c.id));
+    box.append(chip);
+  }
+  const add = document.createElement("button");
+  add.type = "button";
+  add.className = "chip chip-add";
+  add.textContent = "＋ новый";
+  add.addEventListener("click", () =>
+    openChatDialog(CHIPS_CTX.type === "project" ? CHIPS_CTX.id : null));
+  box.append(add);
+}
+
+async function openDefaultChat() {
+  if (CURRENT_CHAT) return;
+  if (!OVERVIEW.chats.length && !OVERVIEW.projects.length) await loadOverview();
+  const first = OVERVIEW.chats.find((c) => c.mode === "assistant") || OVERVIEW.chats[0];
+  if (first) await openChat(first.id);
+}
+
+/* ---------------- чат ---------------- */
+
+function addMsgRow(role, text, opts = {}) {
+  const row = document.createElement("div");
+  row.className = "msg-row " + role;
+  if (role === "assistant") {
+    const orb = document.createElement("span");
+    orb.className = "orb orb-xs";
+    orb.textContent = "П";
+    row.append(orb);
+  }
   const div = document.createElement("div");
-  div.className = "msg " + cls;
-  div.textContent = text;
-  $("#chat-log").append(div);
+  div.className = "msg " + (opts.error ? "error" : role);
+  if (role === "assistant" && !opts.error) div.innerHTML = renderMd(text);
+  else div.textContent = text;
+  row.append(div);
+  $("#chat-log").append(row);
   $("#chat-log").scrollTop = $("#chat-log").scrollHeight;
-  return div;
+  return row;
+}
+
+function addTyping() {
+  const row = document.createElement("div");
+  row.className = "msg-row assistant";
+  const orb = document.createElement("span");
+  orb.className = "orb orb-xs";
+  orb.textContent = "П";
+  const t = document.createElement("div");
+  t.className = "typing";
+  t.innerHTML = "<i></i><i></i><i></i>";
+  row.append(orb, t);
+  $("#chat-log").append(row);
+  $("#chat-log").scrollTop = $("#chat-log").scrollHeight;
+  return row;
 }
 
 const MODE_HINTS = {
-  translator: "Вставь текст — переведу. Можно указать направление и стиль.",
+  translator: "Вставь текст — переведу (по умолчанию на итальянский, деловой стиль).",
   research:   "Назови тему — сделаю ресерч с источниками.",
   board:      "Опиши идею — соберу совет директоров.",
-  business:   "Опиши бизнес или вставь данные — разберу модель.",
+  business:   "Опиши бизнес — разберу модель по полочкам.",
   assistant:  "Спроси или поручи: задачи, календарь, привычки, напоминания…",
 };
 
@@ -368,48 +482,53 @@ async function openChat(chatId) {
     const chat = await api(`/api/chats/${chatId}`);
     CURRENT_CHAT = chat;
     localStorage.setItem("paola_chat", chat.id);
-    $("#chat-title").textContent = chat.title;
-    $("#chat-mode").textContent = (OVERVIEW.modes[chat.mode] || chat.mode)
-      + (chat.project_name ? ` · проект «${chat.project_name}»` : "");
-    $("#chat-input").placeholder = MODE_HINTS[chat.mode] || "Напиши…";
+    if (chat.project_id) CHIPS_CTX = { type: "project", id: chat.project_id };
+    $("#chat-status").textContent = chat.project_name
+      ? `${(OVERVIEW.modes[chat.mode] || "").replace(/^[^\s]+\s/, "")} · «${chat.project_name}»`
+      : "на связи";
+    $("#chat-input").placeholder = MODE_HINTS[chat.mode] || "Напишите Паоле…";
     const log = $("#chat-log");
     log.innerHTML = "";
-    if (!chat.messages.length) {
-      addMsg("assistant", MODE_HINTS[chat.mode] || "Слушаю!");
-    }
-    chat.messages.forEach((m) => addMsg(m.role === "user" ? "user" : "assistant", m.content));
-    renderRail();
+    if (!chat.messages.length) addMsgRow("assistant", MODE_HINTS[chat.mode] || "Слушаю!");
+    chat.messages.forEach((m) =>
+      addMsgRow(m.role === "user" ? "user" : "assistant", m.content));
+    renderChips();
   } catch (err) {
     alert("Не удалось открыть чат: " + err.message);
   }
 }
 
-$("#chat-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
+async function sendChatMessage(message) {
   if (!CURRENT_CHAT) return;
-  const input = $("#chat-input");
-  const message = input.value.trim();
-  if (!message) return;
-  input.value = "";
-  addMsg("user", message);
-  const pending = addMsg("thinking", "Паола думает…");
+  addMsgRow("user", message);
+  const typing = addTyping();
+  $("#chat-status").textContent = "печатает…";
   $("#chat-send").disabled = true;
   try {
     const data = await api(`/api/chats/${CURRENT_CHAT.id}/messages`,
       { method: "POST", body: JSON.stringify({ message }) });
-    pending.remove();
-    addMsg("assistant", data.reply);
-    loadOverview(CURRENT_CHAT.id); // название чата могло обновиться
-    loadTasks();
-    loadHabits();
-    loadReminders();
+    typing.remove();
+    addMsgRow("assistant", data.reply);
+    loadOverview();
+    loadTasks(); loadHabits(); loadReminders();
   } catch (err) {
-    pending.remove();
-    addMsg("error", "Ошибка: " + err.message);
+    typing.remove();
+    addMsgRow("assistant", "Ошибка: " + err.message, { error: true });
   } finally {
+    $("#chat-status").textContent = "на связи";
     $("#chat-send").disabled = false;
-    input.focus();
   }
+}
+
+$("#chat-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const input = $("#chat-input");
+  const message = input.value.trim();
+  if (!message) return;
+  input.value = "";
+  input.style.height = "";
+  await sendChatMessage(message);
+  input.focus();
 });
 
 $("#chat-input").addEventListener("keydown", (e) => {
@@ -417,6 +536,11 @@ $("#chat-input").addEventListener("keydown", (e) => {
     e.preventDefault();
     $("#chat-form").requestSubmit();
   }
+});
+
+$("#chat-input").addEventListener("input", (e) => {
+  e.target.style.height = "";
+  e.target.style.height = Math.min(e.target.scrollHeight, 140) + "px";
 });
 
 $("#chat-delete").addEventListener("click", async () => {
@@ -427,8 +551,141 @@ $("#chat-delete").addEventListener("click", async () => {
     CURRENT_CHAT = null;
     localStorage.removeItem("paola_chat");
     await loadOverview();
+    await openDefaultChat();
   } catch (err) {
     alert("Не удалось удалить: " + err.message);
+  }
+});
+
+/* ---------------- проекты ---------------- */
+
+function renderProjects() {
+  const box = $("#projects-list");
+  box.innerHTML = "";
+  $("#projects-empty").classList.toggle("hidden", OVERVIEW.projects.length > 0);
+  for (const p of OVERVIEW.projects) {
+    const card = document.createElement("div");
+    card.className = "project-card";
+    const name = document.createElement("div");
+    name.className = "project-name";
+    name.textContent = `📁 ${p.name}`;
+    card.append(name);
+    if (p.description) {
+      const d = document.createElement("p");
+      d.className = "project-desc";
+      d.textContent = p.description;
+      card.append(d);
+    }
+    const chats = document.createElement("div");
+    chats.className = "project-chats";
+    for (const c of p.chats) {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "chip";
+      const icon = (OVERVIEW.modes[c.mode] || "").split(" ")[0];
+      chip.textContent = `${icon} ${c.title}`;
+      chip.addEventListener("click", async () => {
+        CHIPS_CTX = { type: "project", id: p.id };
+        switchView("chat");
+        await openChat(c.id);
+      });
+      chats.append(chip);
+    }
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "chip chip-add";
+    add.textContent = "＋ чат";
+    add.addEventListener("click", () => openChatDialog(p.id));
+    chats.append(add);
+    card.append(chats);
+    box.append(card);
+  }
+}
+
+/* ---------------- аналитика ---------------- */
+
+function weekLabel(a) {
+  const f = (iso) => new Date(iso + "T00:00:00")
+    .toLocaleDateString("ru-RU", { day: "numeric", month: "short" });
+  return `${f(a.week_start)} — ${f(a.week_end)}${a.offset === 0 ? " · текущая" : ""}`;
+}
+
+async function loadAnalytics() {
+  const box = $("#analytics-body");
+  box.textContent = "Загружаю…";
+  $("#recommend-box").classList.add("hidden");
+  $("#week-next").disabled = WEEK_OFFSET >= 0;
+  try {
+    const a = await api(`/api/analytics?offset=${WEEK_OFFSET}`);
+    $("#week-label").textContent = weekLabel(a);
+    box.innerHTML = "";
+
+    const hero = document.createElement("div");
+    hero.className = "focus-hero";
+    hero.innerHTML = a.focus_zone
+      ? `<div class="fh-label">Фокус недели</div>
+         <div class="fh-zone">${esc(a.focus_zone)}</div>
+         <div class="fh-total">закрыто задач: ${a.total_done}</div>`
+      : `<div class="fh-label">Фокус недели</div>
+         <div class="fh-zone">—</div>
+         <div class="fh-total">закрытых задач на этой неделе нет</div>`;
+    box.append(hero);
+
+    if (a.zones.length) {
+      const sect = document.createElement("div");
+      sect.className = "section";
+      sect.innerHTML = "<h2 style='margin:14px 0 10px'>По сферам жизни</h2>";
+      const max = a.zones[0].count;
+      for (const z of a.zones) {
+        const row = document.createElement("div");
+        row.className = "zone-row";
+        row.innerHTML =
+          `<div class="zone-top"><span>${esc(z.zone)}</span>` +
+          `<span class="z-count">${z.count}</span></div>` +
+          `<div class="zone-bar"><i style="width:${Math.round(z.count / max * 100)}%"></i></div>`;
+        row.title = z.titles.join("\n");
+        sect.append(row);
+      }
+      box.append(sect);
+    }
+
+    if (a.habits_week.length) {
+      const sect = document.createElement("div");
+      sect.className = "section";
+      sect.innerHTML = "<h2 style='margin:14px 0 10px'>Привычки за неделю</h2>";
+      for (const h of a.habits_week) {
+        const row = document.createElement("div");
+        row.className = "habit-week";
+        row.innerHTML = `<span>${esc(h.name)}</span>` +
+                        `<span class="hw-days">${h.days_done} / 7</span>`;
+        sect.append(row);
+      }
+      box.append(sect);
+    }
+  } catch (err) {
+    box.textContent = "Ошибка загрузки аналитики: " + err.message;
+  }
+}
+
+$("#week-prev").addEventListener("click", () => { WEEK_OFFSET--; loadAnalytics(); });
+$("#week-next").addEventListener("click", () => {
+  if (WEEK_OFFSET < 0) { WEEK_OFFSET++; loadAnalytics(); }
+});
+
+$("#recommend-btn").addEventListener("click", async () => {
+  const btn = $("#recommend-btn");
+  btn.disabled = true;
+  btn.textContent = "Паола анализирует…";
+  try {
+    const data = await api(`/api/analytics/recommendation?offset=${WEEK_OFFSET}`,
+                           { method: "POST" });
+    $("#recommend-text").innerHTML = renderMd(data.recommendation);
+    $("#recommend-box").classList.remove("hidden");
+  } catch (err) {
+    alert("Не получилось: " + err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Рекомендации Паолы";
   }
 });
 
@@ -456,17 +713,18 @@ function openChatDialog(projectId) {
   $("#dlg-chat").showModal();
 }
 
-$("#new-chat-btn").addEventListener("click", () => openChatDialog());
-
 $("#dlg-chat-form").addEventListener("submit", async (e) => {
   if (e.submitter && e.submitter.value === "cancel") return;
   try {
+    const projectId = $("#dlg-chat-project").value || null;
     const chat = await api("/api/chats", { method: "POST", body: JSON.stringify({
       mode: $("#dlg-chat-mode").value,
-      project_id: $("#dlg-chat-project").value || null,
+      project_id: projectId,
       title: $("#dlg-chat-title").value,
     }) });
+    CHIPS_CTX = projectId ? { type: "project", id: projectId } : { type: "standalone" };
     await loadOverview(chat.id);
+    switchView("chat");
   } catch (err) {
     alert("Не удалось создать чат: " + err.message);
   }
@@ -486,7 +744,7 @@ $("#dlg-project-form").addEventListener("submit", async (e) => {
     await api("/api/projects", { method: "POST", body: JSON.stringify({
       name, description: $("#dlg-project-desc").value.trim(),
     }) });
-    await loadOverview(CURRENT_CHAT && CURRENT_CHAT.id);
+    await loadOverview();
   } catch (err) {
     alert("Не удалось создать проект: " + err.message);
   }
@@ -496,8 +754,10 @@ $("#dlg-project-form").addEventListener("submit", async (e) => {
 
 (async function init() {
   try {
-    await api("/api/overview"); // проверка сессии
+    await loadOverview();
     showApp();
+    const saved = localStorage.getItem("paola_chat");
+    if (saved) { try { await openChat(saved); } catch (_) {} }
   } catch (_) {
     showLogin();
   }
