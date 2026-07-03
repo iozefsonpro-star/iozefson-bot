@@ -224,6 +224,92 @@ async def post_reminder(body: ReminderBody):
 
 
 # ---------------------------------------------------------------------------
+# Аналитика недели: фокус по зонам, понедельная навигация
+# ---------------------------------------------------------------------------
+
+from datetime import timedelta
+
+
+def _week_bounds(offset: int):
+    """Границы недели Пн–Вс; offset 0 — текущая, -1 — прошлая и т.д."""
+    today = datetime.now(config.ROME_TZ).date()
+    monday = today - timedelta(days=today.weekday()) + timedelta(weeks=offset)
+    sunday = monday + timedelta(days=6)
+    return monday, sunday
+
+
+@app.get("/api/analytics")
+async def get_analytics(offset: int = 0):
+    offset = max(-52, min(0, offset))
+    monday, sunday = _week_bounds(offset)
+    try:
+        done = await notion.get_done_between(
+            monday.isoformat(), sunday.isoformat() + "T23:59:59")
+        habits = await notion.get_habits()
+        log = await notion.get_habit_log(days=abs(offset) * 7 + 14)
+    except Exception as e:
+        logger.exception("Analytics error")
+        raise HTTPException(status_code=502, detail=_notion_hint(e))
+
+    zones: dict[str, list[str]] = {}
+    for t in done:
+        zones.setdefault(t.get("zone") or "📌 Без зоны", []).append(t["title"])
+    zone_list = sorted(
+        ({"zone": z, "count": len(titles), "titles": titles}
+         for z, titles in zones.items()),
+        key=lambda x: -x["count"])
+
+    week_days = {(monday + timedelta(days=i)).isoformat() for i in range(7)}
+    habits_week = []
+    for h in habits:
+        days_done = sum(1 for e in log
+                        if e["habit"] == h["name"] and e["done"] and e["date"] in week_days)
+        habits_week.append({"name": h["name"], "days_done": days_done})
+
+    return {
+        "offset": offset,
+        "week_start": monday.isoformat(),
+        "week_end": sunday.isoformat(),
+        "total_done": len(done),
+        "zones": zone_list,
+        "focus_zone": zone_list[0]["zone"] if zone_list else None,
+        "habits_week": habits_week,
+    }
+
+
+@app.post("/api/analytics/recommendation")
+async def analytics_recommendation(offset: int = 0):
+    """Рекомендации Паолы по итогам недели (по запросу, чтобы не жечь токены)."""
+    data = await get_analytics(offset=offset)
+    try:
+        active = await notion.get_active_tasks()
+        overdue = await notion.get_overdue_tasks()
+    except Exception:
+        active, overdue = [], []
+    zones_str = "\n".join(f"- {z['zone']}: {z['count']} задач — "
+                          + "; ".join(z["titles"][:5]) for z in data["zones"]) or "ничего"
+    habits_str = "\n".join(f"- {h['name']}: {h['days_done']}/7 дней"
+                           for h in data["habits_week"]) or "нет данных"
+    prompt = (
+        f"Неделя {data['week_start']}—{data['week_end']}.\n"
+        f"Закрыто задач по зонам:\n{zones_str}\n\n"
+        f"Привычки за неделю:\n{habits_str}\n\n"
+        f"Сейчас активных задач: {len(active)}, из них просрочено: {len(overdue)}.\n\n"
+        "Дай короткий разбор эффективности недели: 1) где был фокус и что это значит; "
+        "2) какая сфера просела; 3) две конкретные рекомендации на следующую неделю. "
+        "До 120 слов, plain text с эмодзи зон, без markdown."
+    )
+    try:
+        resp = await agent.client.messages.create(
+            model=config.MODEL_SMART, max_tokens=800,
+            system=agent.BASE_IDENTITY, messages=[{"role": "user", "content": prompt}])
+        text = "\n".join(b.text for b in resp.content if b.type == "text").strip()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Ошибка генерации: {e}")
+    return {"recommendation": text}
+
+
+# ---------------------------------------------------------------------------
 # Аналитика: проекты и чаты
 # ---------------------------------------------------------------------------
 
