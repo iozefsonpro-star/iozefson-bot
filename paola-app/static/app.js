@@ -566,43 +566,75 @@ $("#chat-input").addEventListener("input", (e) => {
   e.target.style.height = Math.min(e.target.scrollHeight, 140) + "px";
 });
 
-/* ---------------- голосовой ввод (Web Speech API) ---------------- */
+/* ---------------- голосовой ввод (запись → сервер → Whisper) ----------------
+   Работает на iPhone/iPad/Chrome: пишем звук в браузере (MediaRecorder),
+   отправляем на /api/transcribe, вставляем распознанный текст в поле. */
 
 (function initVoice() {
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   const mic = $("#mic-btn");
-  if (!SR || !mic) return;            // браузер не поддерживает — микрофон остаётся скрытым
+  if (!mic || !navigator.mediaDevices || !window.MediaRecorder) return;  // нет записи — скрыт
   mic.classList.remove("hidden");
 
-  const rec = new SR();
-  rec.lang = "ru-RU";
-  rec.interimResults = true;
-  rec.continuous = false;
-  let listening = false;
-  let baseText = "";
+  let recorder = null, chunks = [], stream = null, state = "idle";
+
+  function setIcon() {
+    mic.textContent = state === "recording" ? "■" : state === "busy" ? "…" : "🎙";
+    mic.classList.toggle("recording", state === "recording");
+    mic.classList.toggle("busy", state === "busy");
+    mic.disabled = state === "busy";
+  }
+
+  async function start() {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (_) {
+      alert("Нет доступа к микрофону. Разреши доступ для сайта в настройках браузера.");
+      return;
+    }
+    chunks = [];
+    recorder = new MediaRecorder(stream);
+    recorder.addEventListener("dataavailable", (e) => { if (e.data.size) chunks.push(e.data); });
+    recorder.addEventListener("stop", onStop);
+    recorder.start();
+    state = "recording";
+    setIcon();
+  }
+
+  function stopTracks() { if (stream) stream.getTracks().forEach((t) => t.stop()); stream = null; }
+
+  async function onStop() {
+    const type = (recorder && recorder.mimeType) || "audio/webm";
+    stopTracks();
+    const blob = new Blob(chunks, { type });
+    if (!blob.size) { state = "idle"; setIcon(); return; }
+    state = "busy"; setIcon();
+    const ext = /mp4|m4a|aac/.test(type) ? "m4a" : /ogg/.test(type) ? "ogg" : "webm";
+    const fd = new FormData();
+    fd.append("file", blob, "voice." + ext);
+    try {
+      const resp = await fetch("/api/transcribe",
+        { method: "POST", credentials: "same-origin", body: fd });
+      if (!resp.ok) {
+        let d = ""; try { d = (await resp.json()).detail || ""; } catch (_) {}
+        throw new Error(d || `HTTP ${resp.status}`);
+      }
+      const { text } = await resp.json();
+      const input = $("#chat-input");
+      const base = input.value.trim();
+      input.value = (base ? base + " " : "") + (text || "");
+      input.dispatchEvent(new Event("input"));
+      input.focus();
+    } catch (err) {
+      alert("Не удалось распознать: " + err.message);
+    } finally {
+      state = "idle"; setIcon();
+    }
+  }
 
   mic.addEventListener("click", () => {
-    if (listening) { rec.stop(); return; }
-    baseText = $("#chat-input").value.trim();
-    try { rec.start(); } catch (_) {}
+    if (state === "recording") recorder.stop();   // onStop переведёт в busy → idle
+    else if (state === "idle") start();
   });
-
-  rec.addEventListener("start", () => {
-    listening = true;
-    mic.classList.add("recording");
-  });
-
-  rec.addEventListener("result", (e) => {
-    let text = "";
-    for (let i = 0; i < e.results.length; i++) text += e.results[i][0].transcript;
-    const input = $("#chat-input");
-    input.value = (baseText ? baseText + " " : "") + text.trim();
-    input.dispatchEvent(new Event("input"));
-  });
-
-  const stop = () => { listening = false; mic.classList.remove("recording"); $("#chat-input").focus(); };
-  rec.addEventListener("end", stop);
-  rec.addEventListener("error", stop);
 })();
 
 $("#chat-delete").addEventListener("click", async () => {

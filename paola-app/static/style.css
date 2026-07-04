@@ -157,6 +157,8 @@ h2{font-family:var(--display);font-size:22px;font-weight:500;margin:0}
          display:flex;align-items:center;justify-content:center;color:var(--ink-2)}
 .mic-btn.recording{background:var(--overdue);border-color:var(--overdue);
          color:#fff;animation:mic-pulse 1.2s ease-in-out infinite}
+.mic-btn.busy{opacity:.55}
+.mic-btn:disabled{cursor:default}
 @keyframes mic-pulse{0%,100%{box-shadow:0 0 0 0 rgba(192,80,56,.5)}
                      50%{box-shadow:0 0 0 8px rgba(192,80,56,0)}}
 @media (prefers-reduced-motion: reduce){.mic-btn.recording{animation:none}}
