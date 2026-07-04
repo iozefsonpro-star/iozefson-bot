@@ -161,6 +161,28 @@ async def get_tasks():
     }
 
 
+@app.post("/api/tasks/{task_id}/complete")
+async def complete_task(task_id: str):
+    try:
+        await notion.close_task(task_id)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=_notion_hint(e))
+    return {"ok": True}
+
+
+class RescheduleBody(BaseModel):
+    new_date: str  # YYYY-MM-DD
+
+
+@app.post("/api/tasks/{task_id}/reschedule")
+async def reschedule_task(task_id: str, body: RescheduleBody):
+    try:
+        await notion.reschedule_task(task_id, body.new_date)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=_notion_hint(e))
+    return {"ok": True}
+
+
 @app.get("/api/habits")
 async def get_habits():
     try:

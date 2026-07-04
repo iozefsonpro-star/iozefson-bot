@@ -154,6 +154,21 @@
   </nav>
 </div>
 
+<!-- Диалог: перенос дедлайна задачи -->
+<dialog id="dlg-resched">
+  <form method="dialog" class="dlg-form" id="dlg-resched-form">
+    <h3>Перенести дедлайн</h3>
+    <p id="dlg-resched-title" class="dlg-resched-task"></p>
+    <label>Новая дата
+      <input type="date" id="dlg-resched-date" required>
+    </label>
+    <div class="dlg-actions">
+      <button value="cancel" class="pill pill-ghost" formnovalidate>Отмена</button>
+      <button value="ok" class="pill pill-solid">Перенести</button>
+    </div>
+  </form>
+</dialog>
+
 <!-- Диалог: новый чат -->
 <dialog id="dlg-chat">
   <form method="dialog" class="dlg-form" id="dlg-chat-form">

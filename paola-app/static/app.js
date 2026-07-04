@@ -165,29 +165,88 @@ function fmtTaskDate(iso) {
   return p.length === 3 ? `${p[2]}/${p[1]}` : iso;
 }
 
-function taskLi(t, overdue) {
+function taskLi(t) {
   const li = document.createElement("li");
   li.className = "task";
-  const dot = document.createElement("span");
-  dot.className = "t-dot";
+
+  const check = document.createElement("input");
+  check.type = "checkbox";
+  check.className = "t-check";
+  check.setAttribute("aria-label", "Отметить выполненной: " + t.title);
+  check.addEventListener("change", () => completeTask(t.id, li, check));
+
   const title = document.createElement("span");
   title.className = "t-title";
   title.textContent = t.title;
-  li.append(dot, title);
-  if (t.deadline) {
-    const d = document.createElement("span");
-    d.className = "t-date";
-    d.textContent = fmtTaskDate(t.deadline);
-    li.append(d);
+
+  li.append(check, title);
+
+  if (t.deadline || t.zone) {
+    const meta = document.createElement("span");
+    meta.className = "t-meta";
+    if (t.deadline) {
+      const d = document.createElement("span");
+      d.className = "t-date";
+      d.textContent = fmtTaskDate(t.deadline);
+      meta.append(d);
+    }
+    if (t.zone) {
+      const tag = document.createElement("span");
+      tag.className = "t-tag";
+      tag.textContent = t.zone;   // с эмодзи зоны
+      meta.append(tag);
+    }
+    li.append(meta);
   }
-  if (t.zone) {
-    const tag = document.createElement("span");
-    tag.className = "t-tag";
-    tag.textContent = t.zone;   // с эмодзи зоны
-    li.append(tag);
-  }
+
+  const resched = document.createElement("button");
+  resched.type = "button";
+  resched.className = "t-resched";
+  resched.setAttribute("aria-label", "Перенести дедлайн: " + t.title);
+  resched.textContent = "→";
+  resched.addEventListener("click", () => openRescheduleDialog(t));
+  li.append(resched);
+
   return li;
 }
+
+async function completeTask(taskId, li, check) {
+  check.disabled = true;
+  try {
+    await api(`/api/tasks/${taskId}/complete`, { method: "POST" });
+    li.classList.add("t-done");
+    setTimeout(() => loadTasks(), 220);   // короткая анимация — потом обновляем список
+  } catch (err) {
+    check.checked = false;
+    check.disabled = false;
+    alert("Не удалось закрыть задачу: " + err.message);
+  }
+}
+
+let RESCHED_TASK = null;
+
+function openRescheduleDialog(t) {
+  RESCHED_TASK = t;
+  $("#dlg-resched-title").textContent = t.title;
+  $("#dlg-resched-date").value = (t.deadline || "").slice(0, 10)
+    || new Date().toISOString().slice(0, 10);
+  $("#dlg-resched").showModal();
+}
+
+$("#dlg-resched-form").addEventListener("submit", async (e) => {
+  if (e.submitter && e.submitter.value === "cancel") return;
+  if (!RESCHED_TASK) return;
+  const newDate = $("#dlg-resched-date").value;
+  if (!newDate) return;
+  try {
+    await api(`/api/tasks/${RESCHED_TASK.id}/reschedule`, {
+      method: "POST", body: JSON.stringify({ new_date: newDate }),
+    });
+    await loadTasks();
+  } catch (err) {
+    alert("Не удалось перенести: " + err.message);
+  }
+});
 
 // limit: показать первые N задач + кнопку «показать все» (0 = без ограничения)
 function taskGroup(label, tasks, cls, limit = 0) {
