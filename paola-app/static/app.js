@@ -181,31 +181,24 @@ function taskLi(t) {
 
   li.append(check, title);
 
-  if (t.deadline || t.zone) {
-    const meta = document.createElement("span");
-    meta.className = "t-meta";
-    if (t.deadline) {
-      const d = document.createElement("span");
-      d.className = "t-date";
-      d.textContent = fmtTaskDate(t.deadline);
-      meta.append(d);
-    }
-    if (t.zone) {
-      const tag = document.createElement("span");
-      tag.className = "t-tag";
-      tag.textContent = t.zone;   // с эмодзи зоны
-      meta.append(tag);
-    }
-    li.append(meta);
+  const meta = document.createElement("span");
+  meta.className = "t-meta";
+  // Дата — сама и есть control переноса: тап открывает перенос дедлайна.
+  // Без даты показываем плашку-приглашение «+ дата» с тем же действием.
+  const dateBtn = document.createElement("button");
+  dateBtn.type = "button";
+  dateBtn.className = "t-date" + (t.deadline ? "" : " t-date-empty");
+  dateBtn.textContent = t.deadline ? fmtTaskDate(t.deadline) : "+ дата";
+  dateBtn.setAttribute("aria-label", "Перенести дедлайн: " + t.title);
+  dateBtn.addEventListener("click", () => openRescheduleDialog(t));
+  meta.append(dateBtn);
+  if (t.zone) {
+    const tag = document.createElement("span");
+    tag.className = "t-tag";
+    tag.textContent = t.zone;   // с эмодзи зоны
+    meta.append(tag);
   }
-
-  const resched = document.createElement("button");
-  resched.type = "button";
-  resched.className = "t-resched";
-  resched.setAttribute("aria-label", "Перенести дедлайн: " + t.title);
-  resched.textContent = "→";
-  resched.addEventListener("click", () => openRescheduleDialog(t));
-  li.append(resched);
+  li.append(meta);
 
   return li;
 }

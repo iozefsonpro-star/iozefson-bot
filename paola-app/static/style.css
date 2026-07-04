@@ -132,21 +132,24 @@ h2{font-family:var(--display);font-size:22px;font-weight:500;margin:0}
       background:var(--surface);border:1px solid var(--line);align-items:center;
       transition:opacity .2s ease,transform .2s ease}
 .task.t-done{opacity:0;transform:scale(.97)}
-.task .t-check{appearance:none;-webkit-appearance:none;width:18px;height:18px;flex:none;
-      border-radius:50%;background:var(--accent);border:none;cursor:pointer;position:relative}
-.task-group.overdue .t-check{background:var(--overdue)}
-.task .t-check:hover{transform:scale(1.12)}
+.task .t-check{appearance:none;-webkit-appearance:none;width:20px;height:20px;flex:none;
+      border-radius:50%;background:none;border:2px solid var(--accent);
+      cursor:pointer;position:relative}
+.task-group.overdue .t-check{border-color:var(--overdue)}
+.task .t-check:hover{background:color-mix(in srgb,var(--accent) 14%,transparent)}
+.task .t-check:checked{background:var(--accent);border-color:var(--accent)}
+.task-group.overdue .t-check:checked{background:var(--overdue);border-color:var(--overdue)}
 .task .t-check:checked::after{content:"✓";position:absolute;inset:0;display:flex;
-      align-items:center;justify-content:center;color:#fff;font-size:11px;line-height:1}
+      align-items:center;justify-content:center;color:#fff;font-size:12px;line-height:1}
 .task .t-title{flex:1;color:var(--ink)}
 .task .t-meta{display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex:none}
 .task .t-tag{font-size:11.5px;color:var(--muted-2);background:var(--tag-bg);
              border-radius:999px;padding:3px 10px;white-space:nowrap}
-.task .t-date{font-family:var(--mono);font-size:11px;color:var(--muted);white-space:nowrap}
-.task .t-resched{flex:none;width:28px;height:28px;border:none;background:none;
-      color:var(--muted);font-size:16px;border-radius:50%;display:flex;
-      align-items:center;justify-content:center}
-.task .t-resched:hover{background:var(--tag-bg);color:var(--accent)}
+/* дата — сама кнопка переноса дедлайна: тап открывает диалог */
+.task .t-date{font-family:var(--mono);font-size:11px;color:var(--muted);white-space:nowrap;
+      background:none;border:none;padding:2px 5px;border-radius:7px;cursor:pointer}
+.task .t-date:hover{background:var(--tag-bg);color:var(--accent)}
+.task .t-date.t-date-empty{color:var(--accent)}
 
 /* привычки */
 .habits{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:6px}
