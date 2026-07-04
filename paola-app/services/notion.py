@@ -84,16 +84,19 @@ async def get_overdue_tasks() -> list[dict]:
 
 async def create_task(title: str, deadline: str | None = None,
                       priority: str = "✅ Обычное", zone: str = "💼 Бизнес",
+                      project: str | None = None, performer: str = "Юля",
                       comment: str | None = None) -> dict:
     properties = {
         "Задача":     {"title": [{"text": {"content": title}}]},
         "Приоритет":  {"select": {"name": priority}},
         "Статус":     {"select": {"name": "To do"}},
         "Зона":       {"select": {"name": zone}},
-        "Кто делает": {"select": {"name": "Юля"}},
+        "Кто делает": {"select": {"name": performer}},
     }
     if deadline:
         properties["Дедлайн"] = {"date": {"start": deadline}}
+    if project:
+        properties["Проект"] = {"select": {"name": project}}
     if comment:
         properties["Комментарий"] = {"rich_text": [{"text": {"content": comment[:2000]}}]}
     return await notion.pages.create(
