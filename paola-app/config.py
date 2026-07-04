@@ -24,6 +24,7 @@ NOTION_REMINDERS_DB_ID = os.environ.get("NOTION_REMINDERS_DB_ID")  # Напом�
 GOOGLE_TOKEN_JSON  = os.environ.get("GOOGLE_TOKEN_JSON")           # OAuth Google Calendar
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")          # для push-уведомлений
 OWNER_CHAT_ID      = os.environ.get("OWNER_CHAT_ID")
+OPENAI_API_KEY     = os.environ.get("OPENAI_API_KEY")              # голосовой ввод (Whisper); опционально
 
 # --- Поведение ---
 # Пуши дайджестов в Telegram выключены по умолчанию, чтобы не дублировать Паолу

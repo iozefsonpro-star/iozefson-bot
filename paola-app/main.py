@@ -6,7 +6,8 @@ import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
 
-from fastapi import FastAPI, HTTPException, Request, Response
+import httpx
+from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from itsdangerous import BadSignature, TimestampSigner
@@ -464,6 +465,41 @@ async def post_message(chat_id: str, body: MessageBody):
             await storage.rename_chat(chat_id, new_title)
 
     return {"reply": reply}
+
+
+# ---------------------------------------------------------------------------
+# Голосовой ввод: расшифровка записи через OpenAI Whisper
+# ---------------------------------------------------------------------------
+
+@app.post("/api/transcribe")
+async def transcribe(file: UploadFile = File(...)):
+    """Принять аудиозапись из браузера и вернуть распознанный текст (Whisper)."""
+    if not config.OPENAI_API_KEY:
+        raise HTTPException(
+            status_code=400,
+            detail="Голосовой ввод не настроен: добавь OPENAI_API_KEY в переменные сервиса.")
+    audio = await file.read()
+    if not audio:
+        raise HTTPException(status_code=400, detail="Пустая запись.")
+    if len(audio) > 25 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Запись слишком длинная (макс ~25 МБ).")
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(
+                "https://api.openai.com/v1/audio/transcriptions",
+                headers={"Authorization": f"Bearer {config.OPENAI_API_KEY}"},
+                files={"file": (file.filename or "voice.webm", audio,
+                                file.content_type or "audio/webm")},
+                data={"model": "whisper-1", "language": "ru"},
+            )
+        resp.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        logger.error("Whisper error %s: %s", e.response.status_code, e.response.text[:200])
+        raise HTTPException(status_code=502, detail="Не удалось расшифровать запись.")
+    except Exception as e:
+        logger.exception("Transcribe error")
+        raise HTTPException(status_code=502, detail=f"Ошибка транскрипции: {e}")
+    return {"text": (resp.json().get("text") or "").strip()}
 
 
 # ---------------------------------------------------------------------------
