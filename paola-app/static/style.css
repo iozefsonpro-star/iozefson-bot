@@ -1,0 +1,283 @@
+/* Паола — палитра «Небо» (дизайн-токены из handoff) */
+:root{
+  --bg:#E9EDF1;
+  --surface:#F5F8FB;
+  --nudge:#D9E2EA;
+  --nav:#DDE5EC;
+  --line:#DBE4EC;
+  --line-2:#D6E0E8;
+  --line-strong:#A9BBCB;
+  --ink:#1F2731;
+  --ink-2:#586573;
+  --muted:#7891A6;
+  --muted-2:#7C8B9A;
+  --accent:#3E6187;
+  --on-accent:#EEF3F8;
+  --orb-from:#6E93B8;
+  --orb-to:#345677;
+  --overdue:#C05038;
+  --done:#4E9A8E;
+  --tag-bg:#E3EAF1;
+  --r-nudge:22px;
+  --r-task:14px;
+  --r-cal:16px;
+  --display:"Playfair Display",Georgia,serif;
+  --body:"Golos Text",system-ui,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);font-family:var(--body);
+     font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased}
+.hidden{display:none !important}
+button{font-family:inherit;cursor:pointer}
+input,textarea,select{font-family:inherit;font-size:15px;color:var(--ink)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* ---------- общие элементы ---------- */
+.meta-label{font-family:var(--mono);font-size:11px;letter-spacing:2px;
+            text-transform:uppercase;color:var(--muted)}
+.ghost-btn{background:none;border:1px solid var(--line-strong);border-radius:999px;
+           padding:7px 14px;font-size:13px;color:#5E7387;min-height:36px}
+.ghost-btn:hover{border-color:var(--accent);color:var(--accent)}
+.pill{border-radius:999px;padding:10px 18px;font-size:13.5px;font-weight:600;
+      border:none;min-height:44px}
+.pill-solid{background:var(--accent);color:var(--on-accent)}
+.pill-solid:hover{background:#345677}
+.pill-ghost{background:none;border:1px solid var(--line-strong);color:#5E7387}
+.pill-ghost:hover{border-color:var(--accent);color:var(--accent)}
+.empty{color:var(--muted-2);font-size:14px;margin:4px 0}
+.empty.error{color:var(--overdue)}
+.soft-card{background:var(--surface);border:1px solid var(--line);
+           border-radius:var(--r-cal);padding:14px 16px;font-size:14px;color:var(--ink-2)}
+
+/* орб Паолы */
+.orb{display:inline-flex;align-items:center;justify-content:center;flex:none;
+     border-radius:50%;color:#fff;font-family:var(--display);font-weight:500;
+     background:radial-gradient(circle at 32% 30%,var(--orb-from),var(--orb-to));
+     position:relative}
+.orb-xs{width:26px;height:26px;font-size:13px}
+.orb-sm{width:38px;height:38px;font-size:18px}
+.orb-md{width:40px;height:40px;font-size:19px}
+.orb-lg{width:64px;height:64px;font-size:32px;margin:0 auto}
+.orb-sm::after,.orb-md::after{content:"";position:absolute;inset:-3px;border-radius:50%;
+  border:2px solid var(--orb-from);opacity:.5;animation:paolaRing 2.6s ease-out infinite}
+@media (prefers-reduced-motion:reduce){.orb::after{animation:none;display:none}}
+@keyframes paolaRing{from{transform:scale(.9);opacity:.5}to{transform:scale(1.6);opacity:0}}
+
+/* ---------- вход ---------- */
+.login-screen{min-height:100vh;display:flex;align-items:center;justify-content:center;
+              background:var(--bg);padding:20px}
+.login-card{background:var(--surface);padding:40px 40px 34px;border-radius:28px;width:320px;
+            display:flex;flex-direction:column;gap:12px;text-align:center;
+            border:1px solid var(--line);box-shadow:0 8px 20px -12px rgba(40,60,80,.35)}
+.login-card h1{font-family:var(--display);margin:6px 0 0;font-size:30px;font-weight:500}
+.login-sub{margin:0 0 10px;color:var(--muted);font-size:13px}
+.login-card input{padding:12px 16px;border:1px solid var(--line-strong);border-radius:999px;
+                  background:#fff;text-align:center}
+.login-card button{padding:12px;background:var(--accent);color:var(--on-accent);border:none;
+                   border-radius:999px;font-size:15px;font-weight:600}
+.login-error{color:var(--overdue);font-size:13px;margin:0}
+
+/* ---------- каркас приложения ---------- */
+.app{max-width:680px;margin:0 auto;min-height:100vh;position:relative}
+.view{padding:18px 22px calc(150px + env(safe-area-inset-bottom));
+      display:flex;flex-direction:column;gap:18px}
+.view-title h2{margin:0}
+
+h2{font-family:var(--display);font-size:22px;font-weight:500;margin:0}
+.section{display:flex;flex-direction:column;gap:10px}
+.section-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+
+/* ---------- главная ---------- */
+.home-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
+.greeting{font-family:var(--display);font-weight:500;font-size:38px;line-height:1.05;
+          margin:8px 0 0}
+.nudge{background:var(--nudge);border-radius:var(--r-nudge);padding:16px;
+       display:flex;flex-direction:column;gap:12px}
+.nudge-head{display:flex;align-items:center;gap:12px}
+.nudge-who{font-size:13px;color:var(--ink-2);font-weight:500}
+.nudge-text{margin:0;font-size:15px;color:var(--ink);line-height:1.5}
+.nudge-text b{font-weight:700}
+.nudge-actions{display:flex;gap:10px;flex-wrap:wrap}
+
+/* сегмент День/Неделя */
+.seg{display:flex;border:1px solid var(--line-strong);border-radius:999px;overflow:hidden}
+.seg-btn{border:none;background:none;padding:6px 14px;font-size:12.5px;color:var(--muted-2)}
+.seg-btn.active{background:var(--accent);color:var(--on-accent)}
+
+/* календарь */
+.cal-day{font-family:var(--mono);font-size:11px;letter-spacing:2px;text-transform:uppercase;
+         color:var(--muted);margin:12px 0 6px}
+.cal-day:first-child{margin-top:0}
+.cal-event{display:flex;gap:10px;font-size:14px;padding:9px 12px;border-radius:var(--r-task);
+           background:#fff;border:1px solid var(--line-2);margin-bottom:6px;
+           align-items:baseline;color:var(--ink)}
+.cal-event .cal-time{white-space:nowrap;font-variant-numeric:tabular-nums;
+                     color:var(--accent);font-size:13px;font-weight:500}
+
+/* задачи */
+.task-group{margin-bottom:10px}
+.task-group h3{font-family:var(--mono);font-size:11px;letter-spacing:2px;
+               text-transform:uppercase;color:var(--muted);margin:0 0 8px;font-weight:500}
+.task-group.overdue h3{color:var(--overdue)}
+.task-list{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:6px;
+           max-height:280px;overflow-y:auto}
+.task{display:flex;gap:10px;font-size:14px;padding:11px 13px;border-radius:var(--r-task);
+      background:var(--surface);border:1px solid var(--line);align-items:center}
+.task .t-dot{width:9px;height:9px;border-radius:50%;background:var(--accent);flex:none}
+.task-group.overdue .t-dot{background:var(--overdue)}
+.task .t-title{flex:1;color:var(--ink)}
+.task .t-tag{font-size:11.5px;color:var(--muted-2);background:var(--tag-bg);
+             border-radius:999px;padding:3px 10px;white-space:nowrap}
+.task .t-date{font-family:var(--mono);font-size:11px;color:var(--muted);white-space:nowrap}
+
+/* привычки */
+.habits{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:6px}
+.habit{display:flex;align-items:center;gap:12px;padding:11px 13px;border:1px solid var(--line);
+       border-radius:var(--r-task);background:var(--surface)}
+.habit input[type=checkbox]{width:20px;height:20px;accent-color:var(--done);flex:none}
+.habit .h-name{flex:1;color:var(--ink)}
+.habit .h-streak{font-family:var(--mono);font-size:11px;color:var(--muted);white-space:nowrap}
+.habit.done .h-name{color:var(--muted-2);text-decoration:line-through}
+
+/* напоминания */
+.reminders{list-style:none;padding:0;margin:0 0 4px;display:flex;flex-direction:column;gap:6px}
+.reminder{display:flex;gap:12px;font-size:14px;padding:9px 13px;background:var(--surface);
+          border:1px solid var(--line);border-radius:var(--r-task)}
+.reminder .r-when{font-family:var(--mono);font-size:12px;color:var(--accent);
+                  white-space:nowrap;padding-top:1px}
+.reminder-form{display:grid;grid-template-columns:1fr;gap:8px}
+.reminder-form input{padding:10px 14px;border:1px solid var(--line-strong);
+                     border-radius:999px;background:#fff}
+
+/* голосовой ввод */
+.mic-btn{width:48px;height:48px;flex:none;border:1px solid var(--line-2);
+         background:var(--surface);border-radius:50%;font-size:19px;line-height:1;
+         display:flex;align-items:center;justify-content:center;color:var(--ink-2)}
+.mic-btn.recording{background:var(--overdue);border-color:var(--overdue);
+         color:#fff;animation:mic-pulse 1.2s ease-in-out infinite}
+@keyframes mic-pulse{0%,100%{box-shadow:0 0 0 0 rgba(192,80,56,.5)}
+                     50%{box-shadow:0 0 0 8px rgba(192,80,56,0)}}
+@media (prefers-reduced-motion: reduce){.mic-btn.recording{animation:none}}
+
+/* ---------- чат ---------- */
+#view-chat{padding-bottom:calc(74px + env(safe-area-inset-bottom));height:100vh;
+           height:100dvh;gap:12px}
+.chat-head{display:flex;align-items:center;gap:12px}
+.chat-head-txt{flex:1}
+.chat-head-name{font-family:var(--display);font-size:19px;font-weight:500}
+.chat-head-status{font-size:12.5px;color:var(--muted)}
+.chips{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;flex:none;
+       scrollbar-width:none}
+.chips::-webkit-scrollbar{display:none}
+.chip{border-radius:999px;padding:7px 14px;font-size:13px;white-space:nowrap;border:none;
+      background:var(--surface);color:var(--muted-2);border:1px solid var(--line-2);
+      min-height:36px}
+.chip.active{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
+.chip.chip-add{color:var(--accent);border-style:dashed}
+.chat-log{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:12px;min-height:0}
+.msg-row{display:flex;gap:8px;align-items:flex-end;max-width:92%}
+.msg-row.user{align-self:flex-end}
+.msg-row.assistant{align-self:flex-start}
+.msg{padding:11px 15px;font-size:14.5px;line-height:1.55;overflow-wrap:break-word;
+     white-space:pre-wrap}
+.msg a{color:var(--accent)}
+.msg.user{background:var(--accent);color:var(--on-accent);
+          border-radius:20px 20px 6px 20px}
+.msg.assistant{background:var(--surface);border:1px solid var(--line-2);color:var(--ink);
+               border-radius:20px 20px 20px 6px}
+.msg.error{background:#F2DEDA;color:var(--overdue);border-radius:20px 20px 20px 6px}
+.typing{display:inline-flex;gap:4px;padding:14px 16px;background:var(--surface);
+        border:1px solid var(--line-2);border-radius:20px 20px 20px 6px}
+.typing i{width:7px;height:7px;border-radius:50%;background:var(--muted);
+          animation:paolaPulse 1.2s infinite}
+.typing i:nth-child(2){animation-delay:.2s}
+.typing i:nth-child(3){animation-delay:.4s}
+@keyframes paolaPulse{0%,100%{transform:scale(1);opacity:.85}50%{transform:scale(1.08);opacity:1}}
+.chat-input{display:flex;gap:10px;align-items:flex-end;flex:none}
+.chat-input textarea{flex:1;resize:none;padding:12px 18px;border:1px solid var(--line-2);
+                     border-radius:24px;background:var(--surface);max-height:140px;
+                     min-height:48px;line-height:1.4}
+.chat-input button{width:48px;height:48px;flex:none;border:none;background:var(--accent);
+                   color:var(--on-accent);border-radius:50%;font-size:19px;font-weight:700}
+.chat-input button:disabled{background:var(--line-strong)}
+
+/* ---------- проекты ---------- */
+.projects{display:flex;flex-direction:column;gap:12px}
+.project-card{background:var(--surface);border:1px solid var(--line);
+              border-radius:var(--r-cal);padding:14px 16px;display:flex;
+              flex-direction:column;gap:8px}
+.project-name{font-family:var(--display);font-size:18px;font-weight:500}
+.project-desc{font-size:13px;color:var(--ink-2);margin:0}
+.project-chats{display:flex;flex-wrap:wrap;gap:8px}
+
+/* ---------- аналитика ---------- */
+.week-nav{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.focus-hero{background:var(--nudge);border-radius:var(--r-nudge);padding:18px;
+            text-align:center}
+.focus-hero .fh-label{font-family:var(--mono);font-size:11px;letter-spacing:2px;
+                      text-transform:uppercase;color:var(--muted);margin-bottom:6px}
+.focus-hero .fh-zone{font-family:var(--display);font-size:26px;font-weight:500}
+.focus-hero .fh-total{font-size:13px;color:var(--ink-2);margin-top:4px}
+.zone-row{display:flex;flex-direction:column;gap:5px;margin-bottom:12px}
+.zone-top{display:flex;justify-content:space-between;font-size:14px}
+.zone-top .z-count{font-family:var(--mono);font-size:12px;color:var(--muted)}
+.zone-bar{height:8px;border-radius:999px;background:#D6DFE8;overflow:hidden}
+.zone-bar i{display:block;height:100%;background:var(--accent);border-radius:999px}
+
+/* переключатель Итоги/План — во всю ширину */
+.seg-wide{width:100%;margin-bottom:14px}
+.seg-wide .seg-btn{flex:1;padding:9px 14px;font-size:13.5px}
+
+/* «показать все» под группой задач */
+.show-more{margin-top:8px;background:none;border:none;color:var(--accent);
+           font-size:13.5px;font-weight:600;padding:2px 0}
+
+/* переносится / задачи по зонам (список) */
+.carry-zone{margin-bottom:12px}
+.carry-zone-name{font-size:14px;font-weight:600;margin-bottom:4px}
+.carry-list{list-style:none;margin:0;padding:0}
+.carry-list li{position:relative;padding:3px 0 3px 16px;font-size:14px;color:var(--ink-2)}
+.carry-list li::before{content:"•";position:absolute;left:2px;color:var(--muted)}
+
+/* план недели — календарь по дням */
+.plan-day{margin-bottom:12px}
+.plan-day-head{font-family:var(--mono);font-size:11px;letter-spacing:1.5px;
+               text-transform:uppercase;color:var(--muted);margin-bottom:5px}
+.plan-ev{display:flex;gap:10px;font-size:14px;padding:2px 0}
+.plan-ev .cal-time{white-space:nowrap;font-variant-numeric:tabular-nums;color:var(--ink-2)}
+.plan-ev.free{color:var(--muted-2)}
+.habit-week{display:flex;justify-content:space-between;font-size:14px;padding:9px 13px;
+            background:var(--surface);border:1px solid var(--line);
+            border-radius:var(--r-task);margin-bottom:6px}
+.habit-week .hw-days{font-family:var(--mono);font-size:12px;color:var(--muted)}
+
+/* ---------- таб-бар ---------- */
+.tabbar{position:fixed;left:50%;transform:translateX(-50%);bottom:0;
+        width:min(680px,100%);background:var(--nav);display:flex;
+        padding:8px 10px calc(8px + env(safe-area-inset-bottom));gap:6px;z-index:50}
+.tab{flex:1;border:none;background:none;border-radius:14px;padding:8px 4px;
+     font-size:11.5px;color:#8B9CAC;display:flex;flex-direction:column;
+     align-items:center;gap:3px;min-height:44px}
+.tab-ico{font-size:17px;line-height:1}
+.tab.active{background:var(--accent);color:var(--on-accent)}
+
+/* ---------- dialogs ---------- */
+dialog{border:none;border-radius:22px;padding:0;box-shadow:0 24px 70px rgba(30,45,60,.4);
+       width:min(420px,92vw);background:var(--surface)}
+dialog::backdrop{background:rgba(31,39,49,.45)}
+.dlg-form{display:flex;flex-direction:column;gap:14px;padding:24px 26px}
+.dlg-form h3{font-family:var(--display);margin:0;font-size:21px;font-weight:500}
+.dlg-form label{display:flex;flex-direction:column;gap:6px;font-size:13px;color:var(--ink-2)}
+.dlg-form input,.dlg-form select,.dlg-form textarea{padding:10px 14px;
+    border:1px solid var(--line-strong);border-radius:14px;background:#fff}
+.dlg-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:4px}
+
+@media (prefers-reduced-motion:no-preference){
+  .msg-row{animation:rise .18s ease-out}
+  @keyframes rise{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+}
+@media (min-width:700px){
+  .reminder-form{grid-template-columns:1fr auto auto}
+}

@@ -22,6 +22,7 @@ Notion MCP доступен в сессии — читать страницы н
 - **Рабочие ветки:** `claude/название-задачи` → мерж в `master`
 - **Основной файл:** `bot.py` (~2514 строк, весь код бота)
 - Остальные файлы: `auth_google.py`, `requirements.txt`, `Procfile`
+- **`paola-app/`** — отдельное веб-приложение «Паола App» (рутина + аналитика): FastAPI, агентное ядро на tool use, свои Procfile и requirements. Деплоится вторым сервисом Railway (Root Directory `paola-app`), кода бота не касается. Подробности — `paola-app/README.md`
 
 ---
 

@@ -1,28 +1,30 @@
 """
-Получение токена Google Calendar для бота Паолы и Паола App.
+Получение токена Google Calendar для Паола App.
 
-ВАЖНО: бот и Паола App используют ОДИН И ТОТ ЖЕ токен — переменную
-GOOGLE_TOKEN_JSON. Авторизуешься один раз, полученный JSON кладёшь в
-переменные ОБОИХ сервисов Railway (бот + paola-app).
+ВАЖНО: пока живы оба сервиса — бот Паолы и Паола App используют ОДИН И ТОТ ЖЕ
+токен (переменную GOOGLE_TOKEN_JSON). Авторизуешься один раз, полученный JSON
+кладёшь в переменные ОБОИХ сервисов Railway. Когда бот уйдёт — этот скрипт
+останется рабочим способом перевыпустить токен прямо из сервиса Паола App.
 
 Перед запуском убедись, что в Google Cloud Console → OAuth consent screen
 приложение в статусе PRODUCTION (не Testing!). Токен, выданный в Testing,
 аннулируется через 7 дней.
 
 Способ авторизации — ручной (без устаревшего OOB, который Google отключил).
-Работает прямо в Railway Console.
+Работает прямо в Railway Console сервиса Паола App.
 
 Шаги:
   1. В Google Cloud Console переведи приложение в Production.
-  2. Убедись, что GOOGLE_CLIENT_SECRET_JSON задан в Railway Variables.
-  3. Запусти в Railway Console: python3 auth_google.py
+  2. Убедись, что GOOGLE_CLIENT_SECRET_JSON задан в переменных сервиса Паола App
+     (это JSON учётных данных OAuth-клиента из Google Cloud Console).
+  3. Запусти в Railway Console сервиса Паола App: python3 auth_google.py
   4. Открой показанную ссылку в браузере, войди в Google, разреши доступ.
   5. Google перенаправит на http://localhost/?code=... — страница НЕ
      откроется («не удаётся подключиться»), это нормально.
   6. Скопируй из адресной строки браузера значение code (или весь URL
      целиком) и вставь обратно в консоль.
-  7. Скопируй напечатанный JSON и вставь его в Railway как
-     GOOGLE_TOKEN_JSON — в ОБА сервиса (бот и paola-app), затем передеплой.
+  7. Скопируй напечатанный JSON и вставь его в Railway как GOOGLE_TOKEN_JSON —
+     в сервис Паола App (и в бота, пока он ещё существует), затем передеплой.
 """
 
 import json
@@ -50,7 +52,7 @@ else:
     if not SECRET_FILE:
         raise FileNotFoundError(
             "Учётные данные не найдены.\n"
-            "Задай GOOGLE_CLIENT_SECRET_JSON в Railway Variables."
+            "Задай GOOGLE_CLIENT_SECRET_JSON в переменных сервиса Паола App."
         )
     print(f"Использую файл учётных данных: {SECRET_FILE}")
 
@@ -93,5 +95,5 @@ if not creds.refresh_token:
 
 print("\n✅ Авторизация завершена.")
 print("\n📋 Скопируй JSON ниже и вставь в Railway как GOOGLE_TOKEN_JSON")
-print("   в ОБА сервиса (бот и paola-app), затем передеплой:\n")
+print("   (в сервис Паола App; и в бота, пока он ещё есть), затем передеплой:\n")
 print(creds.to_json())
