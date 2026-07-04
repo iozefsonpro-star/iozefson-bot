@@ -86,12 +86,6 @@
         <button type="submit" class="pill pill-solid">Создать</button>
       </form>
     </div>
-
-    <button id="ask-paola" class="ask-bar" type="button">
-      <span class="orb orb-xs" aria-hidden="true">П</span>
-      <span class="ask-hint">Спросить Паолу…</span>
-      <span class="ask-arrow">↑</span>
-    </button>
   </section>
 
   <!-- ===== ЧАТ ===== -->
@@ -107,6 +101,7 @@
     <div id="chat-chips" class="chips"></div>
     <div id="chat-log" class="chat-log"></div>
     <form id="chat-form" class="chat-input">
+      <button type="button" id="mic-btn" class="mic-btn hidden" aria-label="Голосовой ввод" title="Наговорить">🎙</button>
       <textarea id="chat-input" rows="1" placeholder="Напишите Паоле…" required></textarea>
       <button type="submit" id="chat-send" aria-label="Отправить">↑</button>
     </form>
@@ -125,16 +120,28 @@
   <!-- ===== АНАЛИТИКА ===== -->
   <section id="view-analytics" class="view hidden">
     <div class="section-head view-title"><h2>Аналитика</h2></div>
-    <div class="week-nav">
-      <button id="week-prev" class="ghost-btn" type="button">◀</button>
-      <span id="week-label" class="meta-label"></span>
-      <button id="week-next" class="ghost-btn" type="button">▶</button>
+    <div class="seg seg-wide">
+      <button class="seg-btn active" data-analytics-mode="review" type="button">Итоги недели</button>
+      <button class="seg-btn" data-analytics-mode="plan" type="button">План недели</button>
     </div>
-    <div id="analytics-body">Загружаю…</div>
-    <button id="recommend-btn" class="pill pill-solid" type="button">Рекомендации Паолы</button>
-    <div id="recommend-box" class="nudge hidden">
-      <div class="nudge-head"><span class="orb orb-sm">П</span><span class="nudge-who">Паола · итоги недели</span></div>
-      <p id="recommend-text" class="nudge-text"></p>
+
+    <div id="analytics-review">
+      <div class="week-nav">
+        <button id="week-prev" class="ghost-btn" type="button">◀</button>
+        <span id="week-label" class="meta-label"></span>
+        <button id="week-next" class="ghost-btn" type="button">▶</button>
+      </div>
+      <div id="analytics-body">Загружаю…</div>
+      <button id="recommend-btn" class="pill pill-solid" type="button">Рекомендации Паолы</button>
+      <div id="recommend-box" class="nudge hidden">
+        <div class="nudge-head"><span class="orb orb-sm">П</span><span class="nudge-who">Паола · итоги недели</span></div>
+        <p id="recommend-text" class="nudge-text"></p>
+      </div>
+    </div>
+
+    <div id="analytics-plan" class="hidden">
+      <div class="plan-label meta-label"></div>
+      <div id="plan-body">Загружаю…</div>
     </div>
   </section>
 

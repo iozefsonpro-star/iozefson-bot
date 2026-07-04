@@ -8,6 +8,7 @@ let OVERVIEW = { projects: [], chats: [], modes: {} };
 let CURRENT_CHAT = null;
 let CHIPS_CTX = { type: "standalone" };   // или {type:"project", id}
 let WEEK_OFFSET = 0;
+let ANALYTICS_MODE = "review";   // review — итоги недели; plan — план следующей
 let TASKS_CACHE = null;
 
 async function api(path, opts = {}) {
@@ -94,17 +95,11 @@ function switchView(name) {
   });
   $$(".tab").forEach((t) => t.classList.toggle("active", t.dataset.view === name));
   if (name === "chat" && !CURRENT_CHAT) openDefaultChat();
-  if (name === "analytics") loadAnalytics();
+  if (name === "analytics") loadAnalyticsView();
   window.scrollTo(0, 0);
 }
 
 $$(".tab").forEach((t) => t.addEventListener("click", () => switchView(t.dataset.view)));
-
-$("#ask-paola").addEventListener("click", async () => {
-  switchView("chat");
-  await openDefaultChat();
-  $("#chat-input").focus();
-});
 
 /* ---------------- календарь ---------------- */
 
@@ -154,15 +149,21 @@ async function loadCalendar(days) {
   }
 }
 
-$$(".seg-btn").forEach((btn) => {
+$$("[data-cal-days]").forEach((btn) => {
   btn.addEventListener("click", () => {
-    $$(".seg-btn").forEach((b) => b.classList.remove("active"));
+    $$("[data-cal-days]").forEach((b) => b.classList.remove("active"));
     btn.classList.add("active");
     loadCalendar(parseInt(btn.dataset.calDays, 10));
   });
 });
 
 /* ---------------- задачи + карточка-инициатива ---------------- */
+
+function fmtTaskDate(iso) {
+  // "YYYY-MM-DD…" → "DD/MM" (Юлия предпочитает день/месяц)
+  const p = iso.slice(0, 10).split("-");
+  return p.length === 3 ? `${p[2]}/${p[1]}` : iso;
+}
 
 function taskLi(t, overdue) {
   const li = document.createElement("li");
@@ -176,19 +177,20 @@ function taskLi(t, overdue) {
   if (t.deadline) {
     const d = document.createElement("span");
     d.className = "t-date";
-    d.textContent = t.deadline.slice(5, 10);
+    d.textContent = fmtTaskDate(t.deadline);
     li.append(d);
   }
   if (t.zone) {
     const tag = document.createElement("span");
     tag.className = "t-tag";
-    tag.textContent = t.zone.replace(/^[^\s]+\s/, "");
+    tag.textContent = t.zone;   // с эмодзи зоны
     li.append(tag);
   }
   return li;
 }
 
-function taskGroup(label, tasks, cls) {
+// limit: показать первые N задач + кнопку «показать все» (0 = без ограничения)
+function taskGroup(label, tasks, cls, limit = 0) {
   if (!tasks.length) return null;
   const div = document.createElement("div");
   div.className = "task-group" + (cls ? " " + cls : "");
@@ -196,8 +198,21 @@ function taskGroup(label, tasks, cls) {
   h.textContent = `${label} · ${tasks.length}`;
   const ul = document.createElement("ul");
   ul.className = "task-list";
-  tasks.forEach((t) => ul.append(taskLi(t)));
+  const collapsed = limit > 0 && tasks.length > limit;
+  const shown = collapsed ? tasks.slice(0, limit) : tasks;
+  shown.forEach((t) => ul.append(taskLi(t)));
   div.append(h, ul);
+  if (collapsed) {
+    const more = document.createElement("button");
+    more.type = "button";
+    more.className = "show-more";
+    more.textContent = `показать все (${tasks.length})`;
+    more.addEventListener("click", () => {
+      tasks.slice(limit).forEach((t) => ul.append(taskLi(t)));
+      more.remove();
+    });
+    div.append(more);
+  }
   return div;
 }
 
@@ -251,7 +266,7 @@ async function loadTasks() {
     const groups = [
       taskGroup("Просрочено", data.overdue, "overdue"),
       taskGroup("Сегодня", data.today, ""),
-      taskGroup("Остальные", data.other, ""),
+      taskGroup("Остальные", data.other, "", 5),
     ].filter(Boolean);
     if (!groups.length) box.innerHTML = '<div class="soft-card">Активных задач нет — красота.</div>';
     else groups.forEach((g) => box.append(g));
@@ -477,7 +492,7 @@ const MODE_HINTS = {
   assistant:  "Спроси или поручи: задачи, календарь, привычки, напоминания…",
 };
 
-async function openChat(chatId) {
+async function openChat(chatId, silent = false) {
   try {
     const chat = await api(`/api/chats/${chatId}`);
     CURRENT_CHAT = chat;
@@ -494,6 +509,14 @@ async function openChat(chatId) {
       addMsgRow(m.role === "user" ? "user" : "assistant", m.content));
     renderChips();
   } catch (err) {
+    // Чат мог быть удалён (в т.ч. при редеплое без Volume) — молча сбрасываем
+    // сохранённый id и не показываем ошибку на старте.
+    if (silent || /не найден|404/i.test(err.message)) {
+      CURRENT_CHAT = null;
+      localStorage.removeItem("paola_chat");
+      if (!silent) await openDefaultChat();
+      return;
+    }
     alert("Не удалось открыть чат: " + err.message);
   }
 }
@@ -542,6 +565,45 @@ $("#chat-input").addEventListener("input", (e) => {
   e.target.style.height = "";
   e.target.style.height = Math.min(e.target.scrollHeight, 140) + "px";
 });
+
+/* ---------------- голосовой ввод (Web Speech API) ---------------- */
+
+(function initVoice() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const mic = $("#mic-btn");
+  if (!SR || !mic) return;            // браузер не поддерживает — микрофон остаётся скрытым
+  mic.classList.remove("hidden");
+
+  const rec = new SR();
+  rec.lang = "ru-RU";
+  rec.interimResults = true;
+  rec.continuous = false;
+  let listening = false;
+  let baseText = "";
+
+  mic.addEventListener("click", () => {
+    if (listening) { rec.stop(); return; }
+    baseText = $("#chat-input").value.trim();
+    try { rec.start(); } catch (_) {}
+  });
+
+  rec.addEventListener("start", () => {
+    listening = true;
+    mic.classList.add("recording");
+  });
+
+  rec.addEventListener("result", (e) => {
+    let text = "";
+    for (let i = 0; i < e.results.length; i++) text += e.results[i][0].transcript;
+    const input = $("#chat-input");
+    input.value = (baseText ? baseText + " " : "") + text.trim();
+    input.dispatchEvent(new Event("input"));
+  });
+
+  const stop = () => { listening = false; mic.classList.remove("recording"); $("#chat-input").focus(); };
+  rec.addEventListener("end", stop);
+  rec.addEventListener("error", stop);
+})();
 
 $("#chat-delete").addEventListener("click", async () => {
   if (!CURRENT_CHAT) return;
@@ -649,6 +711,28 @@ async function loadAnalytics() {
       box.append(sect);
     }
 
+    if (a.carry_over && a.carry_over.length) {
+      const sect = document.createElement("div");
+      sect.className = "section";
+      sect.innerHTML =
+        `<h2 style='margin:14px 0 10px'>Переносится · ${a.carry_total}</h2>`;
+      for (const z of a.carry_over) {
+        const grp = document.createElement("div");
+        grp.className = "carry-zone";
+        grp.innerHTML = `<div class="carry-zone-name">${esc(z.zone)}</div>`;
+        const ul = document.createElement("ul");
+        ul.className = "carry-list";
+        for (const title of z.titles) {
+          const li = document.createElement("li");
+          li.textContent = title;
+          ul.append(li);
+        }
+        grp.append(ul);
+        sect.append(grp);
+      }
+      box.append(sect);
+    }
+
     if (a.habits_week.length) {
       const sect = document.createElement("div");
       sect.className = "section";
@@ -666,6 +750,121 @@ async function loadAnalytics() {
     box.textContent = "Ошибка загрузки аналитики: " + err.message;
   }
 }
+
+/* --- переключатель Итоги / План и рендер плана недели --- */
+
+function planWeekLabel(p) {
+  const f = (iso) => new Date(iso + "T00:00:00")
+    .toLocaleDateString("ru-RU", { day: "numeric", month: "short" });
+  return `Следующая неделя · ${f(p.week_start)} — ${f(p.week_end)}`;
+}
+
+function loadAnalyticsView() {
+  const isPlan = ANALYTICS_MODE === "plan";
+  $("#analytics-review").classList.toggle("hidden", isPlan);
+  $("#analytics-plan").classList.toggle("hidden", !isPlan);
+  $$("[data-analytics-mode]").forEach((b) =>
+    b.classList.toggle("active", b.dataset.analyticsMode === ANALYTICS_MODE));
+  if (isPlan) loadPlan(); else loadAnalytics();
+}
+
+async function loadPlan() {
+  const box = $("#plan-body");
+  box.textContent = "Загружаю…";
+  try {
+    const p = await api("/api/plan");
+    $(".plan-label").textContent = planWeekLabel(p);
+    box.innerHTML = "";
+
+    const hero = document.createElement("div");
+    hero.className = "focus-hero";
+    hero.innerHTML = p.focus_zone
+      ? `<div class="fh-label">Фокус следующей недели</div>
+         <div class="fh-zone">${esc(p.focus_zone)}</div>
+         <div class="fh-total">задач в плане: ${p.total_tasks}</div>`
+      : `<div class="fh-label">Следующая неделя</div>
+         <div class="fh-zone">чисто</div>
+         <div class="fh-total">задач с дедлайном пока нет</div>`;
+    box.append(hero);
+
+    // Календарь Пн–Пт
+    const calSect = document.createElement("div");
+    calSect.className = "section";
+    calSect.innerHTML = "<h2 style='margin:14px 0 10px'>Календарь недели</h2>";
+    if (!p.calendar_configured) {
+      const e = document.createElement("p");
+      e.className = "empty";
+      e.textContent = "Календарь не подключён.";
+      calSect.append(e);
+    } else {
+      const WD = ["Пн", "Вт", "Ср", "Чт", "Пт"];
+      p.calendar.forEach((day, i) => {
+        const d = document.createElement("div");
+        d.className = "plan-day";
+        const dd = new Date(day.date + "T00:00:00").toLocaleDateString(
+          "ru-RU", { day: "numeric", month: "short" });
+        let inner = `<div class="plan-day-head">${WD[i]} · ${dd}</div>`;
+        if (day.events.length) {
+          inner += day.events.map((ev) =>
+            `<div class="plan-ev"><span class="cal-time">${ev.emoji} ${esc(ev.time)}</span>` +
+            `<span>${esc(ev.title)}</span></div>`).join("");
+        } else {
+          inner += `<div class="plan-ev free">свободно</div>`;
+        }
+        d.innerHTML = inner;
+        calSect.append(d);
+      });
+    }
+    box.append(calSect);
+
+    // Задачи по зонам
+    if (p.zones.length) {
+      const sect = document.createElement("div");
+      sect.className = "section";
+      sect.innerHTML = "<h2 style='margin:14px 0 10px'>Задачи по сферам</h2>";
+      for (const z of p.zones) {
+        const grp = document.createElement("div");
+        grp.className = "carry-zone";
+        grp.innerHTML = `<div class="carry-zone-name">${esc(z.zone)}</div>`;
+        const ul = document.createElement("ul");
+        ul.className = "carry-list";
+        for (const title of z.titles) {
+          const li = document.createElement("li");
+          li.textContent = title;
+          ul.append(li);
+        }
+        grp.append(ul);
+        sect.append(grp);
+      }
+      box.append(sect);
+    }
+
+    // Очередь
+    if (p.queue.length) {
+      const sect = document.createElement("div");
+      sect.className = "section";
+      sect.innerHTML = "<h2 style='margin:14px 0 10px'>Висит в очереди</h2>";
+      const ul = document.createElement("ul");
+      ul.className = "carry-list";
+      for (const title of p.queue) {
+        const li = document.createElement("li");
+        li.textContent = title;
+        ul.append(li);
+      }
+      sect.append(ul);
+      box.append(sect);
+    }
+  } catch (err) {
+    box.textContent = "Ошибка загрузки плана: " + err.message;
+  }
+}
+
+$$("[data-analytics-mode]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    ANALYTICS_MODE = btn.dataset.analyticsMode;
+    loadAnalyticsView();
+  });
+});
 
 $("#week-prev").addEventListener("click", () => { WEEK_OFFSET--; loadAnalytics(); });
 $("#week-next").addEventListener("click", () => {
@@ -757,7 +956,7 @@ $("#dlg-project-form").addEventListener("submit", async (e) => {
     await loadOverview();
     showApp();
     const saved = localStorage.getItem("paola_chat");
-    if (saved) { try { await openChat(saved); } catch (_) {} }
+    if (saved) { try { await openChat(saved, true); } catch (_) {} }
   } catch (_) {
     showLogin();
   }

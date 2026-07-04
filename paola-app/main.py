@@ -151,6 +151,8 @@ async def get_tasks():
             today_tasks.append(t)
         else:
             other.append(t)
+    # «Остальные»: сначала ближайший дедлайн → дальше, задачи без даты — в конце.
+    other.sort(key=lambda t: (0, t["deadline"][:10]) if t.get("deadline") else (1, ""))
     return {
         "overdue": notion.sort_by_priority(overdue),
         "today": today_tasks,
@@ -245,6 +247,7 @@ async def get_analytics(offset: int = 0):
     try:
         done = await notion.get_done_between(
             monday.isoformat(), sunday.isoformat() + "T23:59:59")
+        carry = await notion.get_deadline_between(monday.isoformat(), sunday.isoformat())
         habits = await notion.get_habits()
         log = await notion.get_habit_log(days=abs(offset) * 7 + 14)
     except Exception as e:
@@ -258,6 +261,14 @@ async def get_analytics(offset: int = 0):
         ({"zone": z, "count": len(titles), "titles": titles}
          for z, titles in zones.items()),
         key=lambda x: -x["count"])
+
+    # «Переносится»: незакрытые задачи с дедлайном на этой неделе, сгруппированы по зоне.
+    carry_zones: dict[str, list[str]] = {}
+    for t in carry:
+        carry_zones.setdefault(t.get("zone") or "📌 Без зоны", []).append(t["title"])
+    carry_list = sorted(
+        ({"zone": z, "titles": titles} for z, titles in carry_zones.items()),
+        key=lambda x: -len(x["titles"]))
 
     week_days = {(monday + timedelta(days=i)).isoformat() for i in range(7)}
     habits_week = []
@@ -273,7 +284,65 @@ async def get_analytics(offset: int = 0):
         "total_done": len(done),
         "zones": zone_list,
         "focus_zone": zone_list[0]["zone"] if zone_list else None,
+        "carry_over": carry_list,
+        "carry_total": len(carry),
         "habits_week": habits_week,
+    }
+
+
+@app.get("/api/plan")
+async def get_plan():
+    """План следующей недели (Пн–Пт): календарь по дням + задачи по зонам + очередь.
+
+    Аналог воскресной сводки бота — «подготовка к неделе» на вкладке Аналитика.
+    """
+    today = datetime.now(config.ROME_TZ).date()
+    next_mon = today + timedelta(days=(7 - today.weekday()))
+    next_fri = next_mon + timedelta(days=4)
+    try:
+        deadline_tasks = await notion.get_deadline_between(
+            next_mon.isoformat(), next_fri.isoformat())
+        undated = await notion.get_undated_active()
+    except Exception as e:
+        logger.exception("Plan error")
+        raise HTTPException(status_code=502, detail=_notion_hint(e))
+
+    important = [t for t in undated if t.get("priority") == "❗ Важное"]
+    queue = [t for t in undated if t.get("priority") != "❗ Важное"][:5]
+
+    week_tasks = deadline_tasks + important
+    zones: dict[str, list[str]] = {}
+    for t in week_tasks:
+        zones.setdefault(t.get("zone") or "📌 Без зоны", []).append(t["title"])
+    zone_list = sorted(
+        ({"zone": z, "titles": titles} for z, titles in zones.items()),
+        key=lambda x: -len(x["titles"]))
+
+    # Календарь Пн–Пт следующей недели.
+    days_out = (next_fri - today).days
+    cal_days = []
+    if config.GOOGLE_TOKEN_JSON:
+        from services import gcal
+        events = await gcal.get_events(days=days_out)
+        week_iso = {(next_mon + timedelta(days=i)).isoformat() for i in range(5)}
+        by_day: dict[str, list] = {}
+        for ev in events:
+            if ev["day"] in week_iso:
+                by_day.setdefault(ev["day"], []).append(
+                    {"time": ev["time"], "title": ev["title"], "emoji": ev["emoji"]})
+        for i in range(5):
+            d = (next_mon + timedelta(days=i)).isoformat()
+            cal_days.append({"date": d, "events": by_day.get(d, [])})
+
+    return {
+        "week_start": next_mon.isoformat(),
+        "week_end": next_fri.isoformat(),
+        "calendar_configured": bool(config.GOOGLE_TOKEN_JSON),
+        "calendar": cal_days,
+        "zones": zone_list,
+        "focus_zone": zone_list[0]["zone"] if zone_list else None,
+        "queue": [t["title"] for t in queue],
+        "total_tasks": len(week_tasks),
     }
 
 

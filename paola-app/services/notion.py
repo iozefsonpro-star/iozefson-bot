@@ -110,6 +110,34 @@ async def reschedule_task(page_id: str, new_date: str) -> None:
                               properties={"Дедлайн": {"date": {"start": new_date}}})
 
 
+async def get_deadline_between(start_iso: str, end_iso: str,
+                               statuses: tuple[str, ...] = ("To do", "In progress", "Sospeso")
+                               ) -> list[dict]:
+    """Незакрытые задачи с дедлайном в интервале [start; end] (даты YYYY-MM-DD)."""
+    pages = await _query_all(
+        config.NOTION_TODOLIST_DB_ID,
+        filter={"and": [
+            {"or": [{"property": "Статус", "select": {"equals": s}} for s in statuses]},
+            {"property": "Дедлайн", "date": {"on_or_after": start_iso}},
+            {"property": "Дедлайн", "date": {"on_or_before": end_iso}},
+        ]},
+    )
+    return [t for p in pages if (t := parse_task(p))["title"]]
+
+
+async def get_undated_active() -> list[dict]:
+    """Активные задачи без дедлайна (для «важное» и «очереди» в плане недели)."""
+    pages = await _query_all(
+        config.NOTION_TODOLIST_DB_ID,
+        filter={"and": [
+            {"or": [{"property": "Статус", "select": {"equals": s}}
+                    for s in ACTIVE_STATUSES]},
+            {"property": "Дедлайн", "date": {"is_empty": True}},
+        ]},
+    )
+    return [t for p in pages if (t := parse_task(p))["title"]]
+
+
 async def get_done_between(start_iso: str, end_iso: str) -> list[dict]:
     """Задачи со статусом Done, отредактированные в интервале дат (прокси даты закрытия)."""
     pages = await _query_all(

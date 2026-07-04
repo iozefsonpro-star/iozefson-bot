@@ -151,15 +151,15 @@ h2{font-family:var(--display);font-size:22px;font-weight:500;margin:0}
 .reminder-form input{padding:10px 14px;border:1px solid var(--line-strong);
                      border-radius:999px;background:#fff}
 
-/* «Спросить Паолу» */
-.ask-bar{position:fixed;left:50%;transform:translateX(-50%);
-         bottom:calc(74px + env(safe-area-inset-bottom));
-         width:min(636px,calc(100% - 44px));
-         display:flex;align-items:center;gap:12px;background:var(--surface);
-         border:1px solid var(--line-2);border-radius:999px;padding:9px 14px;
-         box-shadow:0 8px 20px -12px rgba(40,60,80,.35);min-height:48px}
-.ask-hint{flex:1;text-align:left;color:var(--muted-2);font-size:14.5px}
-.ask-arrow{color:var(--accent);font-weight:700;font-size:17px}
+/* голосовой ввод */
+.mic-btn{width:48px;height:48px;flex:none;border:1px solid var(--line-2);
+         background:var(--surface);border-radius:50%;font-size:19px;line-height:1;
+         display:flex;align-items:center;justify-content:center;color:var(--ink-2)}
+.mic-btn.recording{background:var(--overdue);border-color:var(--overdue);
+         color:#fff;animation:mic-pulse 1.2s ease-in-out infinite}
+@keyframes mic-pulse{0%,100%{box-shadow:0 0 0 0 rgba(192,80,56,.5)}
+                     50%{box-shadow:0 0 0 8px rgba(192,80,56,0)}}
+@media (prefers-reduced-motion: reduce){.mic-btn.recording{animation:none}}
 
 /* ---------- чат ---------- */
 #view-chat{padding-bottom:calc(74px + env(safe-area-inset-bottom));height:100vh;
@@ -225,6 +225,29 @@ h2{font-family:var(--display);font-size:22px;font-weight:500;margin:0}
 .zone-top .z-count{font-family:var(--mono);font-size:12px;color:var(--muted)}
 .zone-bar{height:8px;border-radius:999px;background:#D6DFE8;overflow:hidden}
 .zone-bar i{display:block;height:100%;background:var(--accent);border-radius:999px}
+
+/* переключатель Итоги/План — во всю ширину */
+.seg-wide{width:100%;margin-bottom:14px}
+.seg-wide .seg-btn{flex:1;padding:9px 14px;font-size:13.5px}
+
+/* «показать все» под группой задач */
+.show-more{margin-top:8px;background:none;border:none;color:var(--accent);
+           font-size:13.5px;font-weight:600;padding:2px 0}
+
+/* переносится / задачи по зонам (список) */
+.carry-zone{margin-bottom:12px}
+.carry-zone-name{font-size:14px;font-weight:600;margin-bottom:4px}
+.carry-list{list-style:none;margin:0;padding:0}
+.carry-list li{position:relative;padding:3px 0 3px 16px;font-size:14px;color:var(--ink-2)}
+.carry-list li::before{content:"•";position:absolute;left:2px;color:var(--muted)}
+
+/* план недели — календарь по дням */
+.plan-day{margin-bottom:12px}
+.plan-day-head{font-family:var(--mono);font-size:11px;letter-spacing:1.5px;
+               text-transform:uppercase;color:var(--muted);margin-bottom:5px}
+.plan-ev{display:flex;gap:10px;font-size:14px;padding:2px 0}
+.plan-ev .cal-time{white-space:nowrap;font-variant-numeric:tabular-nums;color:var(--ink-2)}
+.plan-ev.free{color:var(--muted-2)}
 .habit-week{display:flex;justify-content:space-between;font-size:14px;padding:9px 13px;
             background:var(--surface);border:1px solid var(--line);
             border-radius:var(--r-task);margin-bottom:6px}

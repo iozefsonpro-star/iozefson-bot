@@ -20,7 +20,12 @@ GCAL_EMOJI = {
     "Beauty": "💅", "Mental efficiency": "🧠", "Viaggi": "✈️",
     "Work Vin": "🏠", "Vita": "🏠", "My calendar": "🏠", "Birthday": "🎂",
 }
-GCAL_SKIP = {"Tasks", "Ciclo Yuliya", "Астро-календарь"}
+# Календари, которые не показываем совсем.
+# Домашние/рабочие календари мужа (🏠 Work Vin, Vita) исключены — их смены
+# (R9, R12 и т.п.) не нужны в бизнес-сводке. «My calendar» оставлен как личный Юлии.
+GCAL_SKIP = {"Tasks", "Ciclo Yuliya", "Астро-календарь", "Work Vin", "Vita"}
+# Отдельные события, которые прячем по названию независимо от календаря.
+GCAL_SKIP_TITLES = {"BBR"}
 GENERALI_DOMAIN = "@agmonza.it"
 
 _service_cache: dict = {}
@@ -78,6 +83,8 @@ def _fetch_events_sync(days: int, from_now: bool) -> list[dict]:
 
         for ev in items:
             title = ev.get("summary", "(без названия)")
+            if title.strip().upper() in GCAL_SKIP_TITLES:
+                continue
             start_raw = ev["start"].get("dateTime", ev["start"].get("date", ""))
             end_raw   = ev["end"].get("dateTime", ev["end"].get("date", ""))
             if "T" in start_raw:
