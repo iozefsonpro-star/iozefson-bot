@@ -26,9 +26,9 @@
   --mono:"JetBrains Mono",ui-monospace,monospace;
 }
 *{box-sizing:border-box}
-html,body{margin:0;padding:0}
+html,body{margin:0;padding:0;height:100%}
 body{background:var(--bg);color:var(--ink);font-family:var(--body);
-     font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased}
+     font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased;overflow:hidden}
 .hidden{display:none !important}
 button{font-family:inherit;cursor:pointer}
 input,textarea,select{font-family:inherit;font-size:15px;color:var(--ink)}
@@ -79,10 +79,15 @@ input,textarea,select{font-family:inherit;font-size:15px;color:var(--ink)}
                    border-radius:999px;font-size:15px;font-weight:600}
 .login-error{color:var(--overdue);font-size:13px;margin:0}
 
-/* ---------- каркас приложения ---------- */
-.app{max-width:680px;margin:0 auto;min-height:100vh;position:relative}
-.view{padding:18px 22px calc(150px + env(safe-area-inset-bottom));
-      display:flex;flex-direction:column;gap:18px}
+/* ---------- каркас приложения ----------
+   Таб-бар — flex-элемент (не position:fixed): в iOS-приложении, установленном
+   на экран («домашняя» PWA), fixed-элементы не прибиты к вьюпорту и уезжают
+   при скролле. Вместо этого .app — вертикальный flex на всю высоту экрана,
+   а скроллится только текущий .view; таб-бар — обычный последний элемент. */
+.app{max-width:680px;margin:0 auto;position:relative;
+     height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidden}
+.view{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;
+      padding:18px 22px 20px;display:flex;flex-direction:column;gap:18px}
 .view-title h2{margin:0}
 
 h2{font-family:var(--display);font-size:22px;font-weight:500;margin:0}
@@ -162,8 +167,7 @@ h2{font-family:var(--display);font-size:22px;font-weight:500;margin:0}
 @media (prefers-reduced-motion: reduce){.mic-btn.recording{animation:none}}
 
 /* ---------- чат ---------- */
-#view-chat{padding-bottom:calc(74px + env(safe-area-inset-bottom));height:100vh;
-           height:100dvh;gap:12px}
+#view-chat{gap:12px}
 .chat-head{display:flex;align-items:center;gap:12px}
 .chat-head-txt{flex:1}
 .chat-head-name{font-family:var(--display);font-size:19px;font-weight:500}
@@ -254,9 +258,8 @@ h2{font-family:var(--display);font-size:22px;font-weight:500;margin:0}
 .habit-week .hw-days{font-family:var(--mono);font-size:12px;color:var(--muted)}
 
 /* ---------- таб-бар ---------- */
-.tabbar{position:fixed;left:50%;transform:translateX(-50%);bottom:0;
-        width:min(680px,100%);background:var(--nav);display:flex;
-        padding:8px 10px calc(8px + env(safe-area-inset-bottom));gap:6px;z-index:50}
+.tabbar{flex:none;background:var(--nav);display:flex;
+        padding:8px 10px calc(8px + env(safe-area-inset-bottom));gap:6px}
 .tab{flex:1;border:none;background:none;border-radius:14px;padding:8px 4px;
      font-size:11.5px;color:#8B9CAC;display:flex;flex-direction:column;
      align-items:center;gap:3px;min-height:44px}

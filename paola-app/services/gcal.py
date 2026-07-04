@@ -85,6 +85,11 @@ def _fetch_events_sync(days: int, from_now: bool) -> list[dict]:
             title = ev.get("summary", "(без названия)")
             if title.strip().upper() in GCAL_SKIP_TITLES:
                 continue
+            # Google Calendar сам прячет отклонённые встречи в своём интерфейсе —
+            # API этого не делает по умолчанию, поэтому фильтруем вручную.
+            if any(a.get("self") and a.get("responseStatus") == "declined"
+                   for a in ev.get("attendees", [])):
+                continue
             start_raw = ev["start"].get("dateTime", ev["start"].get("date", ""))
             end_raw   = ev["end"].get("dateTime", ev["end"].get("date", ""))
             if "T" in start_raw:

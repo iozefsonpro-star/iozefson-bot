@@ -2,6 +2,7 @@
 
 Запуск: uvicorn main:app --host 0.0.0.0 --port $PORT
 """
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -244,15 +245,22 @@ def _week_bounds(offset: int):
 async def get_analytics(offset: int = 0):
     offset = max(-52, min(0, offset))
     monday, sunday = _week_bounds(offset)
-    try:
-        done = await notion.get_done_between(
-            monday.isoformat(), sunday.isoformat() + "T23:59:59")
-        carry = await notion.get_deadline_between(monday.isoformat(), sunday.isoformat())
-        habits = await notion.get_habits()
-        log = await notion.get_habit_log(days=abs(offset) * 7 + 14)
-    except Exception as e:
-        logger.exception("Analytics error")
-        raise HTTPException(status_code=502, detail=_notion_hint(e))
+    # Каждый запрос независим: если один падает (например, Notion временно
+    # отдал ошибку), остальные блоки аналитики всё равно отрисуются.
+    labels = ["done", "carry", "habits", "log"]
+    results = await asyncio.gather(
+        notion.get_done_between(monday.isoformat(), sunday.isoformat() + "T23:59:59"),
+        notion.get_deadline_between(monday.isoformat(), sunday.isoformat()),
+        notion.get_habits(),
+        notion.get_habit_log(days=abs(offset) * 7 + 14),
+        return_exceptions=True,
+    )
+    for label, r in zip(labels, results):
+        if isinstance(r, Exception):
+            logger.error("Analytics block '%s' failed: %s", label, r)
+    done, carry, habits, log = (r if not isinstance(r, Exception) else [] for r in results)
+    if all(isinstance(r, Exception) for r in results):
+        raise HTTPException(status_code=502, detail=_notion_hint(results[0]))
 
     zones: dict[str, list[str]] = {}
     for t in done:
@@ -299,13 +307,18 @@ async def get_plan():
     today = datetime.now(config.ROME_TZ).date()
     next_mon = today + timedelta(days=(7 - today.weekday()))
     next_fri = next_mon + timedelta(days=4)
-    try:
-        deadline_tasks = await notion.get_deadline_between(
-            next_mon.isoformat(), next_fri.isoformat())
-        undated = await notion.get_undated_active()
-    except Exception as e:
-        logger.exception("Plan error")
-        raise HTTPException(status_code=502, detail=_notion_hint(e))
+    labels = ["deadline_tasks", "undated"]
+    results = await asyncio.gather(
+        notion.get_deadline_between(next_mon.isoformat(), next_fri.isoformat()),
+        notion.get_undated_active(),
+        return_exceptions=True,
+    )
+    for label, r in zip(labels, results):
+        if isinstance(r, Exception):
+            logger.error("Plan block '%s' failed: %s", label, r)
+    deadline_tasks, undated = (r if not isinstance(r, Exception) else [] for r in results)
+    if all(isinstance(r, Exception) for r in results):
+        raise HTTPException(status_code=502, detail=_notion_hint(results[0]))
 
     important = [t for t in undated if t.get("priority") == "❗ Важное"]
     queue = [t for t in undated if t.get("priority") != "❗ Важное"][:5]
