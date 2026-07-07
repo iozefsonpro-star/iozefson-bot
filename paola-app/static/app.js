@@ -119,11 +119,20 @@ async function loadCalendar(days) {
       box.textContent = "Календарь не подключён: заполни GOOGLE_TOKEN_JSON в переменных сервиса.";
       return;
     }
-    if (!data.days.length) {
+    const longEvents = data.long || [];
+    if (!data.days.length && !longEvents.length) {
       box.textContent = days > 0
         ? "На неделе событий нет — окно для глубокой работы."
         : "Сегодня встреч нет — день можно отдать фокусу.";
       return;
+    }
+    if (!data.days.length) {
+      const e = document.createElement("div");
+      e.className = "cal-empty";
+      e.textContent = days > 0
+        ? "На неделе встреч нет — окно для глубокой работы."
+        : "Встреч больше нет — остаток дня можно отдать фокусу.";
+      box.append(e);
     }
     for (const day of data.days) {
       if (days > 0) {
@@ -141,6 +150,24 @@ async function loadCalendar(days) {
         const title = document.createElement("span");
         title.textContent = ev.title;
         line.append(time, title);
+        box.append(line);
+      }
+    }
+    // Долгие события (курсы, периоды) — как «В процессе» у бота: после встреч.
+    if (longEvents.length) {
+      const h = document.createElement("div");
+      h.className = "cal-day";
+      h.textContent = "В процессе";
+      box.append(h);
+      for (const ev of longEvents) {
+        const line = document.createElement("div");
+        line.className = "cal-event";
+        const mark = document.createElement("span");
+        mark.className = "cal-time";
+        mark.textContent = "📚";
+        const title = document.createElement("span");
+        title.textContent = ev.label || ev.title;
+        line.append(mark, title);
         box.append(line);
       }
     }
@@ -537,7 +564,7 @@ function addTyping() {
 }
 
 const MODE_HINTS = {
-  translator: "Вставь текст — переведу (по умолчанию на итальянский, деловой стиль).",
+  translator: "Текст на итальянском/английском — исправлю и объясню правки. «Переведи…» — переведу. Или попроси помочь с письмом.",
   research:   "Назови тему — сделаю ресерч с источниками.",
   board:      "Опиши идею — соберу совет директоров.",
   business:   "Опиши бизнес — разберу модель по полочкам.",

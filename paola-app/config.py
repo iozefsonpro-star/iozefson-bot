@@ -30,8 +30,8 @@ OWNER_CHAT_ID      = os.environ.get("OWNER_CHAT_ID")
 # в переходный период. Включить: DIGESTS_TO_TELEGRAM=1
 DIGESTS_TO_TELEGRAM = os.environ.get("DIGESTS_TO_TELEGRAM", "0") == "1"
 
-MODEL_SMART = "claude-sonnet-5"    # агент, аналитика, совет директоров
-MODEL_FAST  = "claude-haiku-4-5"   # переводы, короткие фразы
+MODEL_SMART = "claude-sonnet-5"    # агент, аналитика, совет директоров, языковой ассистент
+MODEL_FAST  = "claude-haiku-4-5"   # инструмент translate (чистый перевод), короткие фразы
 
 ROME_TZ = ZoneInfo("Europe/Rome")
 
