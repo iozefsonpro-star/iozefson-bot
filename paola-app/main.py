@@ -3,12 +3,14 @@
 Запуск: uvicorn main:app --host 0.0.0.0 --port $PORT
 """
 import asyncio
+import hashlib
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from itsdangerous import BadSignature, TimestampSigner
 from pydantic import BaseModel
@@ -571,9 +573,30 @@ async def healthz():
     return {"ok": True, "missing_env": config.check_required()}
 
 
+def _asset_version() -> str:
+    """Хэш статики для cache-busting — iOS PWA (WKWebView) агрессивно кэширует
+    app.js/style.css по URL и не подтягивает новые версии после редеплоя,
+    даже после перезахода. Версия в query-параметре меняет URL при каждом
+    изменении файлов, так что кэш всегда промахивается на новый деплой."""
+    h = hashlib.sha1()
+    for name in ("static/app.js", "static/style.css"):
+        try:
+            h.update(Path(name).read_bytes())
+        except FileNotFoundError:
+            pass
+    return h.hexdigest()[:10]
+
+
+ASSET_VERSION = _asset_version()
+_INDEX_HTML = (Path("static/index.html").read_text(encoding="utf-8")
+               .replace('href="/static/style.css"', f'href="/static/style.css?v={ASSET_VERSION}"')
+               .replace('src="/static/app.js"', f'src="/static/app.js?v={ASSET_VERSION}"'))
+
+
 @app.get("/")
 async def index():
-    return FileResponse("static/index.html")
+    return Response(content=_INDEX_HTML, media_type="text/html",
+                    headers={"Cache-Control": "no-store"})
 
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
