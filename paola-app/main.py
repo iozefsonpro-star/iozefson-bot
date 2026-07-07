@@ -190,6 +190,60 @@ async def reschedule_task(task_id: str, body: RescheduleBody):
     return {"ok": True}
 
 
+@app.get("/api/day-status")
+async def get_day_status():
+    """Карточка на Доме: обзор дня.
+
+    До полудня — утренний снимок (сколько задач и встреч, фокус, просрочка,
+    без даты). После полудня — статус выполнения (запланировано/сделано/
+    просрочено), раз задачи на сегодня уже могли закрыться или появиться новые.
+    """
+    now = datetime.now(config.ROME_TZ)
+    today_iso = now.date().isoformat()
+    try:
+        active, overdue, undated = await asyncio.gather(
+            notion.get_active_tasks(), notion.get_overdue_tasks(),
+            notion.get_undated_active())
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=_notion_hint(e))
+
+    overdue_ids = {t["id"] for t in overdue}
+    today_tasks = [t for t in active
+                   if t.get("deadline", "")[:10] == today_iso and t["id"] not in overdue_ids]
+
+    zones: dict[str, int] = {}
+    for t in today_tasks + overdue:
+        z = t.get("zone") or "📌 Без зоны"
+        zones[z] = zones.get(z, 0) + 1
+    focus_zone = max(zones, key=zones.get) if zones else None
+
+    result = {
+        "mode": "morning" if now.hour < 12 else "day",
+        "total_tasks": len(active),
+        "today_total": len(today_tasks),
+        "overdue": len(overdue),
+        "undated": len(undated),
+        "focus_zone": focus_zone,
+    }
+    if result["mode"] == "morning":
+        if config.GOOGLE_TOKEN_JSON:
+            from services import gcal
+            try:
+                result["meetings_today"] = len(await gcal.get_events(days=0))
+            except Exception:
+                result["meetings_today"] = 0
+        else:
+            result["meetings_today"] = 0
+    else:
+        try:
+            done_today = await notion.get_done_between(
+                f"{today_iso}T00:00:00", f"{today_iso}T23:59:59")
+            result["today_done"] = len(done_today)
+        except Exception:
+            result["today_done"] = 0
+    return result
+
+
 @app.get("/api/habits")
 async def get_habits():
     try:
