@@ -136,7 +136,8 @@ async def get_calendar(days: int = 0):
     return {"configured": True,
             "days": [{"date": d, "events": by_day[d]} for d in sorted(by_day)],
             "long": [{"title": ev["title"], "end_day": ev["end_day"],
-                      "label": gcal.format_long(ev)} for ev in data["long"]]}
+                      "label": gcal.format_long(ev)} for ev in data["long"]],
+            "hidden_past_today": data["hidden_past_today"]}
 
 
 @app.get("/api/tasks")

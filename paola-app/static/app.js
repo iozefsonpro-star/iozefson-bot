@@ -8,6 +8,7 @@ let OVERVIEW = { projects: [], chats: [], modes: {} };
 let CURRENT_CHAT = null;
 let CHIPS_CTX = { type: "standalone" };   // или {type:"project", id}
 let WEEK_OFFSET = 0;
+let CAL_DAYS = 0;
 let ANALYTICS_MODE = "review";   // review — итоги недели; plan — план следующей
 let TASKS_CACHE = null;
 
@@ -110,6 +111,7 @@ function fmtDay(iso) {
 }
 
 async function loadCalendar(days) {
+  CAL_DAYS = days;
   const box = $("#calendar-body");
   box.textContent = "Загружаю…";
   try {
@@ -121,7 +123,9 @@ async function loadCalendar(days) {
     }
     const longEvents = data.long || [];
     if (!data.days.length && !longEvents.length) {
-      box.textContent = days > 0
+      box.textContent = days === 0 && data.hidden_past_today > 0
+        ? "Встречи на сегодня закончились — остаток дня можно отдать фокусу."
+        : days > 0
         ? "На неделе событий нет — окно для глубокой работы."
         : "Сегодня встреч нет — день можно отдать фокусу.";
       return;
@@ -129,9 +133,11 @@ async function loadCalendar(days) {
     if (!data.days.length) {
       const e = document.createElement("div");
       e.className = "cal-empty";
-      e.textContent = days > 0
+      e.textContent = days === 0 && data.hidden_past_today > 0
+        ? "Встречи на сегодня закончились — остаток дня можно отдать фокусу."
+        : days > 0
         ? "На неделе встреч нет — окно для глубокой работы."
-        : "Встреч больше нет — остаток дня можно отдать фокусу.";
+        : "Встреч сегодня нет.";
       box.append(e);
     }
     for (const day of data.days) {
@@ -182,6 +188,15 @@ $$("[data-cal-days]").forEach((btn) => {
     btn.classList.add("active");
     loadCalendar(parseInt(btn.dataset.calDays, 10));
   });
+});
+
+$("#cal-refresh").addEventListener("click", async () => {
+  const btn = $("#cal-refresh");
+  btn.classList.add("spinning");
+  btn.disabled = true;
+  await loadCalendar(CAL_DAYS);
+  btn.classList.remove("spinning");
+  btn.disabled = false;
 });
 
 /* ---------------- задачи + карточка-инициатива ---------------- */

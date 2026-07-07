@@ -55,16 +55,23 @@ def _get_service_sync():
 
 
 def _fetch_events_sync(days: int, from_now: bool) -> dict:
-    empty = {"events": [], "long": []}
+    empty = {"events": [], "long": [], "hidden_past_today": 0}
     service = _get_service_sync()
     if not service:
         return empty
     now = datetime.now(config.ROME_TZ)
-    time_min = now if from_now else now.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_iso = now.date().isoformat()
+    # Окно запроса к Google всегда с начала дня — from_now не сужает его.
+    # Иначе долгое событие (курс на пару месяцев), у которого сегодня как раз
+    # заканчивается сессия, могло бы выпасть из окна и пропасть из «В процессе»
+    # только из-за того, что "сейчас" позже конца сегодняшней сессии.
+    # from_now скрывает прошедшие обычные встречи ниже, в Python, точечно.
+    time_min = now.replace(hour=0, minute=0, second=0, microsecond=0)
     time_max = (now + timedelta(days=days)).replace(hour=23, minute=59, second=59)
 
     events: list[dict] = []
     long_events: list[dict] = []
+    hidden_past_today = 0
     try:
         calendars = service.calendarList().list().execute().get("items", [])
     except Exception as e:
@@ -97,6 +104,7 @@ def _fetch_events_sync(days: int, from_now: bool) -> dict:
                 continue
             start_raw = ev["start"].get("dateTime", ev["start"].get("date", ""))
             end_raw   = ev["end"].get("dateTime", ev["end"].get("date", ""))
+            dt_end = None
             if "T" in start_raw:
                 dt_start = datetime.fromisoformat(start_raw).astimezone(config.ROME_TZ)
                 dt_end   = datetime.fromisoformat(end_raw).astimezone(config.ROME_TZ)
@@ -112,9 +120,18 @@ def _fetch_events_sync(days: int, from_now: bool) -> dict:
                                  - date.fromisoformat(start_raw)).days
 
             if duration_days >= LONG_EVENT_DAYS:
-                if not any(l["title"] == title for l in long_events):
+                # Долгое событие держим, пока не прошла его дата окончания —
+                # не по точному времени, чтобы не гасло в последний день раньше полуночи.
+                if end_raw[:10] >= today_iso and not any(
+                        l["title"] == title for l in long_events):
                     long_events.append({"title": title, "end_day": end_raw[:10],
                                         "calendar": cal_name})
+                continue
+
+            # from_now прячет уже закончившиеся СЕГОДНЯ обычные встречи;
+            # будущие дни (неделя вперёд) не трогаем — они ещё не наступили.
+            if from_now and day_key == today_iso and dt_end is not None and dt_end <= now:
+                hidden_past_today += 1
                 continue
 
             ev_emoji = emoji
@@ -129,7 +146,7 @@ def _fetch_events_sync(days: int, from_now: bool) -> dict:
 
     events.sort(key=lambda e: e["_sort"])
     long_events.sort(key=lambda e: e["end_day"])
-    return {"events": events, "long": long_events}
+    return {"events": events, "long": long_events, "hidden_past_today": hidden_past_today}
 
 
 async def get_events_full(days: int = 0, from_now: bool = False) -> dict:

@@ -57,9 +57,12 @@
     <div class="section">
       <div class="section-head">
         <h2>Сегодня</h2>
-        <div class="seg">
-          <button class="seg-btn active" data-cal-days="0" type="button">День</button>
-          <button class="seg-btn" data-cal-days="7" type="button">Неделя</button>
+        <div class="cal-head-actions">
+          <button id="cal-refresh" class="icon-btn" type="button" aria-label="Обновить календарь">↻</button>
+          <div class="seg">
+            <button class="seg-btn active" data-cal-days="0" type="button">День</button>
+            <button class="seg-btn" data-cal-days="7" type="button">Неделя</button>
+          </div>
         </div>
       </div>
       <div id="calendar-body" class="soft-card">Загружаю…</div>
