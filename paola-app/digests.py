@@ -24,26 +24,31 @@ async def build_morning_digest() -> str:
     today_iso = now.date().isoformat()
     header = f"Доброе утро, Юлия! {now:%d.%m.%Y} ({_WEEKDAYS_RU[now.weekday()]})"
 
-    tasks, overdue, events, habits, log = await asyncio.gather(
+    tasks, overdue, cal, habits, log = await asyncio.gather(
         notion.get_active_tasks(),
         notion.get_overdue_tasks(),
-        gcal.get_events(days=0),
+        gcal.get_events_full(days=0),
         notion.get_habits(),
         notion.get_habit_log(days=60),
         return_exceptions=True,
     )
     tasks   = tasks   if isinstance(tasks, list) else []
     overdue = overdue if isinstance(overdue, list) else []
-    events  = events  if isinstance(events, list) else []
+    cal     = cal     if isinstance(cal, dict) else {}
     habits  = habits  if isinstance(habits, list) else []
     log     = log     if isinstance(log, list) else []
 
     parts = [header, ""]
 
-    today_events = [e for e in events if e["day"] == today_iso]
+    today_events = [e for e in cal.get("events", []) if e["day"] == today_iso]
     if today_events:
         parts.append("📅 Встречи дня:")
         parts.extend(f"  {gcal.format_event(e)}" for e in today_events)
+        parts.append("")
+
+    if cal.get("long"):
+        parts.append("📚 В процессе:")
+        parts.extend(f"  {gcal.format_long(e)}" for e in cal["long"])
         parts.append("")
 
     tasks_today = notion.sort_by_priority(

@@ -27,6 +27,9 @@ GCAL_SKIP = {"Tasks", "Ciclo Yuliya", "Астро-календарь", "Work Vin
 # Отдельные события, которые прячем по названию независимо от календаря.
 GCAL_SKIP_TITLES = {"BBR"}
 GENERALI_DOMAIN = "@agmonza.it"
+# События длиной от стольких дней (курсы, периоды) — не встречи в сетке дня,
+# а отдельный блок «В процессе» с датой окончания. Как LONG_EVENT_DAYS в боте.
+LONG_EVENT_DAYS = 3
 
 _service_cache: dict = {}
 
@@ -51,20 +54,22 @@ def _get_service_sync():
         return None
 
 
-def _fetch_events_sync(days: int, from_now: bool) -> list[dict]:
+def _fetch_events_sync(days: int, from_now: bool) -> dict:
+    empty = {"events": [], "long": []}
     service = _get_service_sync()
     if not service:
-        return []
+        return empty
     now = datetime.now(config.ROME_TZ)
     time_min = now if from_now else now.replace(hour=0, minute=0, second=0, microsecond=0)
     time_max = (now + timedelta(days=days)).replace(hour=23, minute=59, second=59)
 
     events: list[dict] = []
+    long_events: list[dict] = []
     try:
         calendars = service.calendarList().list().execute().get("items", [])
     except Exception as e:
         logger.error("Calendar list error: %s", e)
-        return []
+        return empty
 
     for cal in calendars:
         cal_name = cal.get("summary", "")
@@ -98,10 +103,19 @@ def _fetch_events_sync(days: int, from_now: bool) -> list[dict]:
                 day_key  = dt_start.date().isoformat()
                 time_str = f"{dt_start:%H:%M}–{dt_end:%H:%M}"
                 sort_key = dt_start.isoformat()
+                duration_days = (dt_end - dt_start).days
             else:
                 day_key  = start_raw
                 time_str = "весь день"
                 sort_key = start_raw
+                duration_days = (date.fromisoformat(end_raw)
+                                 - date.fromisoformat(start_raw)).days
+
+            if duration_days >= LONG_EVENT_DAYS:
+                if not any(l["title"] == title for l in long_events):
+                    long_events.append({"title": title, "end_day": end_raw[:10],
+                                        "calendar": cal_name})
+                continue
 
             ev_emoji = emoji
             if any(GENERALI_DOMAIN in a.get("email", "")
@@ -114,13 +128,37 @@ def _fetch_events_sync(days: int, from_now: bool) -> list[dict]:
             })
 
     events.sort(key=lambda e: e["_sort"])
-    return events
+    long_events.sort(key=lambda e: e["end_day"])
+    return {"events": events, "long": long_events}
+
+
+async def get_events_full(days: int = 0, from_now: bool = False) -> dict:
+    """События календарей: {"events": встречи, "long": долгие периоды/курсы}.
+
+    days=0 — только сегодня; from_now=True — скрыть уже закончившиеся встречи
+    (Google timeMin фильтрует по времени окончания, идущие сейчас остаются).
+    """
+    return await asyncio.to_thread(_fetch_events_sync, days, from_now)
 
 
 async def get_events(days: int = 0, from_now: bool = False) -> list[dict]:
-    """События календарей. days=0 — только сегодня."""
-    return await asyncio.to_thread(_fetch_events_sync, days, from_now)
+    """Только встречи (без долгих событий). days=0 — только сегодня."""
+    return (await get_events_full(days, from_now))["events"]
 
 
 def format_event(ev: dict) -> str:
     return f"{ev['emoji']} {ev['time']} — {ev['title']}"
+
+
+_MONTHS_RU = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля",
+              "августа", "сентября", "октября", "ноября", "декабря"]
+
+
+def format_long(ev: dict) -> str:
+    """«Gastronomia - corso (до 24 августа)» — как в блоке «В процессе» бота."""
+    try:
+        d = date.fromisoformat(ev["end_day"])
+        end = f"до {d.day} {_MONTHS_RU[d.month - 1]}"
+    except (KeyError, ValueError):
+        end = f"до {ev.get('end_day', '?')}"
+    return f"{ev['title']} ({end})"

@@ -126,6 +126,7 @@ h2{font-family:var(--display);font-size:22px;font-weight:500;margin:0}
            align-items:baseline;color:var(--ink)}
 .cal-event .cal-time{white-space:nowrap;font-variant-numeric:tabular-nums;
                      color:var(--accent);font-size:13px;font-weight:500}
+.cal-empty{font-size:14px;color:var(--muted-2);margin-bottom:6px}
 
 /* задачи */
 .task-group{margin-bottom:10px}
