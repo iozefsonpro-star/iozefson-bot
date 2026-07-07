@@ -8,8 +8,8 @@ let OVERVIEW = { projects: [], chats: [], modes: {} };
 let CURRENT_CHAT = null;
 let CHIPS_CTX = { type: "standalone" };   // или {type:"project", id}
 let WEEK_OFFSET = 0;
+let CAL_DAYS = 0;
 let ANALYTICS_MODE = "review";   // review — итоги недели; plan — план следующей
-let TASKS_CACHE = null;
 
 async function api(path, opts = {}) {
   const resp = await fetch(path, {
@@ -67,6 +67,7 @@ function showApp() {
   loadReminders();
   loadOverview();
   loadAnalytics();
+  loadDayStatus();
 }
 
 $("#login-form").addEventListener("submit", async (e) => {
@@ -110,6 +111,7 @@ function fmtDay(iso) {
 }
 
 async function loadCalendar(days) {
+  CAL_DAYS = days;
   const box = $("#calendar-body");
   box.textContent = "Загружаю…";
   try {
@@ -121,7 +123,9 @@ async function loadCalendar(days) {
     }
     const longEvents = data.long || [];
     if (!data.days.length && !longEvents.length) {
-      box.textContent = days > 0
+      box.textContent = days === 0 && data.hidden_past_today > 0
+        ? "Встречи на сегодня закончились — остаток дня можно отдать фокусу."
+        : days > 0
         ? "На неделе событий нет — окно для глубокой работы."
         : "Сегодня встреч нет — день можно отдать фокусу.";
       return;
@@ -129,9 +133,11 @@ async function loadCalendar(days) {
     if (!data.days.length) {
       const e = document.createElement("div");
       e.className = "cal-empty";
-      e.textContent = days > 0
+      e.textContent = days === 0 && data.hidden_past_today > 0
+        ? "Встречи на сегодня закончились — остаток дня можно отдать фокусу."
+        : days > 0
         ? "На неделе встреч нет — окно для глубокой работы."
-        : "Встреч больше нет — остаток дня можно отдать фокусу.";
+        : "Встреч сегодня нет.";
       box.append(e);
     }
     for (const day of data.days) {
@@ -182,6 +188,15 @@ $$("[data-cal-days]").forEach((btn) => {
     btn.classList.add("active");
     loadCalendar(parseInt(btn.dataset.calDays, 10));
   });
+});
+
+$("#cal-refresh").addEventListener("click", async () => {
+  const btn = $("#cal-refresh");
+  btn.classList.add("spinning");
+  btn.disabled = true;
+  await loadCalendar(CAL_DAYS);
+  btn.classList.remove("spinning");
+  btn.disabled = false;
 });
 
 /* ---------------- задачи + карточка-инициатива ---------------- */
@@ -235,7 +250,7 @@ async function completeTask(taskId, li, check) {
   try {
     await api(`/api/tasks/${taskId}/complete`, { method: "POST" });
     li.classList.add("t-done");
-    setTimeout(() => loadTasks(), 220);   // короткая анимация — потом обновляем список
+    setTimeout(() => { loadTasks(); loadDayStatus(); }, 220);   // короткая анимация — потом обновляем список
   } catch (err) {
     check.checked = false;
     check.disabled = false;
@@ -263,6 +278,7 @@ $("#dlg-resched-form").addEventListener("submit", async (e) => {
       method: "POST", body: JSON.stringify({ new_date: newDate }),
     });
     await loadTasks();
+    await loadDayStatus();
   } catch (err) {
     alert("Не удалось перенести: " + err.message);
   }
@@ -295,50 +311,40 @@ function taskGroup(label, tasks, cls, limit = 0) {
   return div;
 }
 
-function renderNudge() {
-  const card = $("#nudge-card");
-  if (!TASKS_CACHE) { card.classList.add("hidden"); return; }
-  const today = new Date().toISOString().slice(0, 10);
-  if (localStorage.getItem("paola_nudge_dismissed") === today) {
+async function loadDayStatus() {
+  const card = $("#day-status-card");
+  try {
+    const d = await api("/api/day-status");
+    const txt = $("#day-status-text");
+    const focus = d.focus_zone ? `Фокус: <b>${esc(d.focus_zone)}</b>. ` : "";
+    if (d.mode === "morning") {
+      const meet = d.meetings_today === 1 ? "1 встреча"
+        : `${d.meetings_today} встреч`;
+      const overdueClause = d.overdue > 0
+        ? `Просрочено: <b>${d.overdue}</b>. ` : "Просроченного нет. ";
+      txt.innerHTML =
+        `Сегодня: <b>${d.today_total} задач</b> с дедлайном, ${meet}. ` +
+        focus + overdueClause +
+        `Без даты: <b>${d.undated}</b>.`;
+    } else {
+      const overdueClause = d.overdue > 0
+        ? `Просрочено <b>${d.overdue}</b> — стоит пересмотреть дедлайн.`
+        : "Просроченных нет — всё по плану.";
+      txt.innerHTML =
+        `На сегодня было запланировано <b>${d.today_total} задач</b>, ` +
+        `выполнено <b>${d.today_done}</b>. ${focus}${overdueClause}`;
+    }
+    card.classList.remove("hidden");
+  } catch (_) {
     card.classList.add("hidden");
-    return;
   }
-  const n = TASKS_CACHE.overdue.length;
-  const txt = $("#nudge-text");
-  if (n > 0) {
-    txt.innerHTML = `У тебя <b>${n} просроченных задач</b>. Разберём их за 10 минут — предложу по каждой: закрыть, перенести или отпустить.`;
-    $("#nudge-go").textContent = "Давай разберём";
-  } else if (TASKS_CACHE.today.length > 0) {
-    txt.innerHTML = `Просроченного нет. На сегодня <b>${TASKS_CACHE.today.length} задач</b> — помочь расставить порядок?`;
-    $("#nudge-go").textContent = "Помоги с планом";
-  } else {
-    card.classList.add("hidden");
-    return;
-  }
-  card.classList.remove("hidden");
 }
-
-$("#nudge-later").addEventListener("click", () => {
-  localStorage.setItem("paola_nudge_dismissed", new Date().toISOString().slice(0, 10));
-  $("#nudge-card").classList.add("hidden");
-});
-
-$("#nudge-go").addEventListener("click", async () => {
-  const overdue = TASKS_CACHE ? TASKS_CACHE.overdue.length : 0;
-  const msg = overdue > 0
-    ? "Давай разберём мои просроченные задачи: покажи их и по каждой предложи — закрыть, перенести (на какую дату) или отпустить. Пойдём по одной."
-    : "Помоги расставить приоритеты в задачах на сегодня: что делать первым и почему.";
-  switchView("chat");
-  await openDefaultChat();
-  await sendChatMessage(msg);
-});
 
 async function loadTasks() {
   const box = $("#tasks-body");
   box.textContent = "Загружаю…";
   try {
     const data = await api("/api/tasks");
-    TASKS_CACHE = data;
     box.innerHTML = "";
     $("#tasks-meta").textContent =
       `${data.overdue.length + data.today.length + data.other.length} активных`;
@@ -349,10 +355,8 @@ async function loadTasks() {
     ].filter(Boolean);
     if (!groups.length) box.innerHTML = '<div class="soft-card">Активных задач нет — красота.</div>';
     else groups.forEach((g) => box.append(g));
-    renderNudge();
   } catch (err) {
     box.textContent = "Ошибка загрузки задач: " + err.message;
-    TASKS_CACHE = null;
   }
 }
 
@@ -612,7 +616,7 @@ async function sendChatMessage(message) {
     typing.remove();
     addMsgRow("assistant", data.reply);
     loadOverview();
-    loadTasks(); loadHabits(); loadReminders();
+    loadTasks(); loadHabits(); loadReminders(); loadDayStatus();
   } catch (err) {
     typing.remove();
     addMsgRow("assistant", "Ошибка: " + err.message, { error: true });
