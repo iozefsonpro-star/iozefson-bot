@@ -232,7 +232,8 @@ async def get_day_status():
             from services import gcal
             try:
                 result["meetings_today"] = len(await gcal.get_events(days=0))
-            except Exception:
+            except Exception as e:
+                logger.warning("day-status: не удалось посчитать встречи: %s", e)
                 result["meetings_today"] = 0
         else:
             result["meetings_today"] = 0
