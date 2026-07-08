@@ -2,6 +2,7 @@
 import asyncio
 import json
 import logging
+import threading
 from datetime import datetime, date, timedelta
 
 from google.oauth2.credentials import Credentials
@@ -32,6 +33,10 @@ GENERALI_DOMAIN = "@agmonza.it"
 LONG_EVENT_DAYS = 3
 
 _service_cache: dict = {}
+# googleapiclient/httplib2 не потокобезопасны: одновременные запросы через один
+# service (карточка статуса дня + виджет календаря грузятся параллельно) ломают
+# друг друга — проигравший тихо получает пустой список («0 встреч»).
+_gcal_lock = threading.Lock()
 
 
 def _get_service_sync():
@@ -55,6 +60,11 @@ def _get_service_sync():
 
 
 def _fetch_events_sync(days: int, from_now: bool) -> dict:
+    with _gcal_lock:
+        return _fetch_events_locked(days, from_now)
+
+
+def _fetch_events_locked(days: int, from_now: bool) -> dict:
     empty = {"events": [], "long": [], "hidden_past_today": 0}
     service = _get_service_sync()
     if not service:
