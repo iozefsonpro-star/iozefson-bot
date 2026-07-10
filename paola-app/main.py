@@ -493,11 +493,30 @@ class ProjectBody(BaseModel):
     description: str = ""
 
 
+async def _ensure_dossier(project_id: str, name: str, description: str) -> str | None:
+    """Создать досье клиента в Notion, если настроено; вернуть page_id.
+
+    Ошибка Notion не должна ломать работу с проектом — логируем и живём без
+    досье (создастся при следующей попытке).
+    """
+    if not config.NOTION_CLIENTS_PAGE_ID:
+        return None
+    try:
+        d = await notion.create_dossier_page(name, description)
+    except Exception as e:
+        logger.error("Не удалось создать досье «%s»: %s", name, _notion_hint(e))
+        return None
+    await storage.set_project_notion(project_id, d["id"], d["url"])
+    return d["id"]
+
+
 @app.post("/api/projects")
 async def post_project(body: ProjectBody):
     if not body.name.strip():
         raise HTTPException(status_code=400, detail="Название проекта пустое")
-    return await storage.create_project(body.name.strip(), body.description.strip())
+    project = await storage.create_project(body.name.strip(), body.description.strip())
+    await _ensure_dossier(project["id"], project["name"], project["description"])
+    return project
 
 
 class ChatCreateBody(BaseModel):
@@ -510,8 +529,11 @@ class ChatCreateBody(BaseModel):
 async def post_chat(body: ChatCreateBody):
     if body.mode not in storage.CHAT_MODES:
         raise HTTPException(status_code=400, detail=f"Неизвестный режим: {body.mode}")
-    title = body.title.strip() or storage.CHAT_MODES[body.mode].split(" ", 1)[1]
-    return await storage.create_chat(body.mode, body.project_id, title)
+    # внутри проекта режим не выбирается — там всегда единый агент проекта
+    mode = "assistant" if body.project_id else body.mode
+    default = "Рабочий чат" if body.project_id else storage.CHAT_MODES[mode].split(" ", 1)[1]
+    title = body.title.strip() or default
+    return await storage.create_chat(mode, body.project_id, title)
 
 
 @app.get("/api/chats/{chat_id}")
@@ -542,11 +564,20 @@ async def post_message(chat_id: str, body: MessageBody):
     history = await storage.get_messages(chat_id)
     api_messages = ([{"role": m["role"], "content": m["content"]} for m in history]
                     + [{"role": "user", "content": body.message}])
+
+    # досье клиента: у старых проектов его может не быть — досоздаём на лету
+    project_page_id = chat.get("project_page_id")
+    if chat.get("project_id") and not project_page_id:
+        project_page_id = await _ensure_dossier(
+            chat["project_id"], chat.get("project_name") or "Клиент",
+            chat.get("project_description") or "")
+
     try:
         reply = await agent.run_chat(
             chat["mode"], api_messages,
             project_name=chat.get("project_name"),
             project_desc=chat.get("project_description"),
+            project_page_id=project_page_id,
         )
     except Exception as e:
         logger.exception("Agent error")
@@ -556,7 +587,8 @@ async def post_message(chat_id: str, body: MessageBody):
     await storage.add_message(chat_id, "assistant", reply)
 
     # первому сообщению — имя чата (если оно стандартное)
-    default_titles = {v.split(" ", 1)[1] for v in storage.CHAT_MODES.values()}
+    default_titles = ({v.split(" ", 1)[1] for v in storage.CHAT_MODES.values()}
+                      | {"Рабочий чат"})
     if not history and chat["title"] in default_titles and chat["mode"] != "translator":
         new_title = body.message.strip().replace("\n", " ")[:42]
         if new_title:

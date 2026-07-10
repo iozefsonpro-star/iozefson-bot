@@ -172,12 +172,14 @@
 <dialog id="dlg-chat">
   <form method="dialog" class="dlg-form" id="dlg-chat-form">
     <h3>Новый чат</h3>
-    <label>Тип
+    <label id="dlg-chat-mode-label">Тип
       <select id="dlg-chat-mode"></select>
     </label>
     <label>Проект (необязательно)
       <select id="dlg-chat-project"><option value="">— без проекта —</option></select>
     </label>
+    <p id="dlg-chat-project-hint" class="dlg-hint hidden">В проекте Паола сама
+      выбирает инструменты — режим не нужен, а материалы и память идут в досье клиента.</p>
     <label>Название (необязательно)
       <input type="text" id="dlg-chat-title" placeholder="Например: Ресерч рынка упаковки">
     </label>

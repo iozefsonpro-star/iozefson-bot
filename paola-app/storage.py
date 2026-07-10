@@ -64,6 +64,12 @@ def _get_conn() -> sqlite3.Connection:
             );
             CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id);
         """)
+        # миграция: у старых баз нет колонок досье (страница клиента в Notion)
+        for col in ("notion_page_id", "notion_url"):
+            try:
+                _conn.execute(f"ALTER TABLE projects ADD COLUMN {col} TEXT")
+            except sqlite3.OperationalError:
+                pass
         # стартовые чаты при первом запуске
         if _conn.execute("SELECT COUNT(*) FROM chats").fetchone()[0] == 0:
             for mode, title in DEFAULT_CHATS:
@@ -106,6 +112,7 @@ def _overview(conn) -> dict:
             (p["id"],)).fetchall()
         projects.append({
             "id": p["id"], "name": p["name"], "description": p["description"],
+            "notion_url": p["notion_url"],
             "chats": [dict(c) for c in chats],
         })
     standalone = conn.execute(
@@ -132,12 +139,21 @@ def _get_chat(conn, chat_id: str) -> dict | None:
         return None
     chat = dict(row)
     if chat["project_id"]:
-        p = conn.execute("SELECT name, description FROM projects WHERE id=?",
-                         (chat["project_id"],)).fetchone()
+        p = conn.execute(
+            "SELECT name, description, notion_page_id, notion_url "
+            "FROM projects WHERE id=?", (chat["project_id"],)).fetchone()
         if p:
             chat["project_name"] = p["name"]
             chat["project_description"] = p["description"]
+            chat["project_page_id"] = p["notion_page_id"]
+            chat["project_notion_url"] = p["notion_url"]
     return chat
+
+
+def _set_project_notion(conn, project_id: str, page_id: str, url: str) -> None:
+    conn.execute("UPDATE projects SET notion_page_id=?, notion_url=? WHERE id=?",
+                 (page_id, url, project_id))
+    conn.commit()
 
 
 def _delete_chat(conn, chat_id: str) -> None:
@@ -164,7 +180,8 @@ def _add_message(conn, chat_id: str, role: str, content: str) -> None:
     conn.commit()
 
 
-create_project = _run(_create_project)
+create_project     = _run(_create_project)
+set_project_notion = _run(_set_project_notion)
 overview       = _run(_overview)
 create_chat    = _run(_create_chat)
 get_chat       = _run(_get_chat)
