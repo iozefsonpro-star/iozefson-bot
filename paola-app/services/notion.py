@@ -282,20 +282,32 @@ async def mark_reminder_sent(page_id: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Материалы: страницы с результатами research/анализа
+# Материалы и досье клиентов: страницы с результатами и памятью проектов
 # ---------------------------------------------------------------------------
 
-async def create_material_page(title: str, blocks: list[dict]) -> str:
-    """Создать страницу-материал внутри страницы «Материалы», вернуть URL.
+def _para(text: str = "") -> dict:
+    rich = [{"type": "text", "text": {"content": text}}] if text else []
+    return {"type": "paragraph", "paragraph": {"rich_text": rich}}
+
+
+def _h2(text: str) -> dict:
+    return {"type": "heading_2",
+            "heading_2": {"rich_text": [{"type": "text", "text": {"content": text}}]}}
+
+
+async def create_material_page(title: str, blocks: list[dict],
+                               parent_page_id: str | None = None) -> str:
+    """Создать страницу-материал (внутри досье проекта или «Материалов»), вернуть URL.
 
     Notion принимает максимум 100 блоков за запрос — остальные дописываются
     батчами через blocks.children.append.
     """
-    if not config.NOTION_MATERIALS_PAGE_ID:
-        raise RuntimeError("NOTION_MATERIALS_PAGE_ID не задан")
+    parent = parent_page_id or config.NOTION_MATERIALS_PAGE_ID
+    if not parent:
+        raise RuntimeError("Не задан родитель страницы (NOTION_MATERIALS_PAGE_ID)")
     first, rest = blocks[:100], blocks[100:]
     page = await notion.pages.create(
-        parent={"page_id": config.NOTION_MATERIALS_PAGE_ID},
+        parent={"page_id": parent},
         properties={"title": {"title": [{"text": {"content": title[:200]}}]}},
         children=first,
     )
@@ -303,3 +315,74 @@ async def create_material_page(title: str, blocks: list[dict]) -> str:
         await notion.blocks.children.append(block_id=page["id"],
                                             children=rest[i:i + 100])
     return page.get("url", "")
+
+
+async def create_dossier_page(name: str, description: str = "") -> dict:
+    """Досье клиента внутри страницы «Клиенты»: скелет секций.
+
+    «Факты и решения» — последняя секция: append_dossier_facts дописывает
+    блоки в конец страницы, и факты попадают под нужный заголовок.
+    """
+    if not config.NOTION_CLIENTS_PAGE_ID:
+        raise RuntimeError("NOTION_CLIENTS_PAGE_ID не задан")
+    children = []
+    if description:
+        children.append(_para(description))
+    children += [_h2("Карточка клиента"), _para(),
+                 _h2("Цели"), _para(),
+                 _h2("Факты и решения")]
+    page = await notion.pages.create(
+        parent={"page_id": config.NOTION_CLIENTS_PAGE_ID},
+        properties={"title": {"title": [{"text": {"content": name[:200]}}]}},
+        children=children,
+    )
+    return {"id": page["id"], "url": page.get("url", "")}
+
+
+async def append_dossier_facts(page_id: str, facts: list[str]) -> None:
+    stamp = datetime.now(config.ROME_TZ).strftime("%d.%m.%Y")
+    children = [{"type": "bulleted_list_item", "bulleted_list_item": {"rich_text": [
+        {"type": "text", "text": {"content": f"{stamp}: {f}"[:1900]}}]}}
+        for f in facts]
+    await notion.blocks.children.append(block_id=page_id, children=children)
+
+
+_TEXT_BLOCKS = {"paragraph", "heading_1", "heading_2", "heading_3",
+                "bulleted_list_item", "numbered_list_item", "to_do",
+                "quote", "callout", "toggle"}
+
+
+async def get_page_text(page_id: str, max_chars: int = 6000) -> str:
+    """Содержимое страницы плоским текстом — для инжекта досье в промпт.
+
+    Заголовки помечаются ##, таблицы разворачиваются построчно, подстраницы
+    (материалы) — одной строкой с названием.
+    """
+    lines: list[str] = []
+    cursor = None
+    while True:
+        kwargs = {"start_cursor": cursor} if cursor else {}
+        resp = await notion.blocks.children.list(block_id=page_id, **kwargs)
+        for b in resp.get("results", []):
+            t = b.get("type")
+            if t in _TEXT_BLOCKS:
+                txt = _rich_to_text(b[t].get("rich_text", []))
+                if not txt:
+                    continue
+                if t.startswith("heading"):
+                    lines.append(f"\n## {txt}")
+                elif t in ("bulleted_list_item", "numbered_list_item", "to_do"):
+                    lines.append(f"- {txt}")
+                else:
+                    lines.append(txt)
+            elif t == "table":
+                rows = await notion.blocks.children.list(block_id=b["id"])
+                for r in rows.get("results", []):
+                    cells = r.get("table_row", {}).get("cells", [])
+                    lines.append(" | ".join(_rich_to_text(c) for c in cells))
+            elif t == "child_page":
+                lines.append(f"- [сохранённый материал] {b.get('child_page', {}).get('title', '')}")
+        if not resp.get("has_more"):
+            break
+        cursor = resp.get("next_cursor")
+    return "\n".join(lines).strip()[:max_chars]

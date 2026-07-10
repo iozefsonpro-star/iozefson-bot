@@ -560,7 +560,12 @@ function renderChips() {
       const label = document.createElement("button");
       label.type = "button";
       label.className = "chip active";
-      label.textContent = `📁 ${p.name}`;
+      label.textContent = p.notion_url ? `📁 ${p.name} ↗` : `📁 ${p.name}`;
+      if (p.notion_url) {
+        label.title = "Открыть досье клиента в Notion";
+        label.addEventListener("click", () =>
+          window.open(p.notion_url, "_blank", "noopener"));
+      }
       box.append(label);
     }
   }
@@ -639,10 +644,19 @@ async function openChat(chatId, silent = false) {
     CURRENT_CHAT = chat;
     localStorage.setItem("paola_chat", chat.id);
     if (chat.project_id) CHIPS_CTX = { type: "project", id: chat.project_id };
-    $("#chat-status").textContent = chat.project_name
-      ? `${(OVERVIEW.modes[chat.mode] || "").replace(/^[^\s]+\s/, "")} · «${chat.project_name}»`
-      : "на связи";
-    $("#chat-input").placeholder = MODE_HINTS[chat.mode] || "Напишите Паоле…";
+    const status = $("#chat-status");
+    if (chat.project_name && chat.project_notion_url) {
+      // проектный чат: название — ссылка на досье клиента в Notion
+      status.innerHTML = `Проект «<a href="${esc(chat.project_notion_url)}" ` +
+        `target="_blank" rel="noopener">${esc(chat.project_name)}</a>» · досье ↗`;
+    } else if (chat.project_name) {
+      status.textContent = `Проект «${chat.project_name}»`;
+    } else {
+      status.textContent = "на связи";
+    }
+    $("#chat-input").placeholder = chat.project_id
+      ? "Спроси или поручи: research, таблицы, совет, задачи…"
+      : MODE_HINTS[chat.mode] || "Напишите Паоле…";
     const log = $("#chat-log");
     log.innerHTML = "";
     if (!chat.messages.length) addMsgRow("assistant", MODE_HINTS[chat.mode] || "Слушаю!");
@@ -773,6 +787,15 @@ function renderProjects() {
     name.className = "project-name";
     name.textContent = `📁 ${p.name}`;
     card.append(name);
+    if (p.notion_url) {
+      const dossier = document.createElement("a");
+      dossier.className = "project-dossier";
+      dossier.href = p.notion_url;
+      dossier.target = "_blank";
+      dossier.rel = "noopener";
+      dossier.textContent = "Досье клиента в Notion ↗";
+      card.append(dossier);
+    }
     if (p.description) {
       const d = document.createElement("p");
       d.className = "project-desc";
@@ -1050,8 +1073,19 @@ function openChatDialog(projectId) {
   }
   if (projectId) projSel.value = projectId;
   $("#dlg-chat-title").value = "";
+  syncChatDialogMode();
   $("#dlg-chat").showModal();
 }
+
+// внутри проекта режим не выбирается — там единый агент со всеми инструментами
+function syncChatDialogMode() {
+  const inProject = Boolean($("#dlg-chat-project").value);
+  $("#dlg-chat-mode-label").classList.toggle("hidden", inProject);
+  $("#dlg-chat-project-hint").classList.toggle("hidden", !inProject);
+  if (inProject) $("#dlg-chat-mode").value = "assistant";
+}
+
+$("#dlg-chat-project").addEventListener("change", syncChatDialogMode);
 
 $("#dlg-chat-form").addEventListener("submit", async (e) => {
   if (e.submitter && e.submitter.value === "cancel") return;

@@ -6,6 +6,9 @@
   research   — веб-поиск + сохранение находок в задачи
   board      — «совет директоров» + веб-поиск
   business   — разбор бизнес-моделей + веб-поиск
+  project    — единый агент проекта-клиента: все инструменты + досье из Notion;
+               включается автоматически для любого чата внутри проекта,
+               какой бы режим ни был у чата записан
 """
 import logging
 from datetime import datetime
@@ -14,6 +17,8 @@ from anthropic import AsyncAnthropic
 
 import config
 import tools
+from services import notion as notion_service
+from tools import context as tool_context
 
 logger = logging.getLogger(__name__)
 
@@ -126,11 +131,37 @@ MODES: dict[str, dict] = {
   и ссылка. В названии страницы укажи суть и проект.
 - Всегда привязывай выводы к контексту: итальянский рынок, PMI, специфика клиента.""",
     },
+    "project": {
+        "model": config.MODEL_SMART,
+        "tools": None,   # заполняется ниже: все инструменты + веб-поиск
+        "system": BASE_IDENTITY + """
+Это рабочий чат проекта-клиента. Ты — единый агент проекта: сама понимаешь,
+какая перед тобой задача, и сама выбираешь инструменты, не спрашивая, «каким
+режимом» работать:
+- research с веб-поиском — всегда с источниками ссылками (надёжные: Il Sole
+  24 Ore, ANSA, ISTAT, Bankitalia, Reuters, FT, Bloomberg, официальные
+  документы ЕС; агрегаторы — не источник);
+- разбор бизнес-моделей — структурно: ценностное предложение → сегменты →
+  каналы → выручка → издержки → ресурсы и партнёры → риски, в конце 3 вопроса
+  на проверку;
+- оценка идеи или решения — board_review (совет директоров);
+- задачи, календарь, напоминания — соответствующие инструменты;
+- объёмный материал (таблица, отчёт) — save_to_notion: полная версия в досье
+  клиента, в чате краткий вывод и ссылка.
+
+Память проекта — досье клиента (приложено ниже). Это единственное, что ты
+помнишь между чатами проекта. Узнала новый устойчивый факт — цифры, решение,
+договорённость, предпочтение клиента — сразу и молча зафиксируй через
+update_client_memory, не спрашивая разрешения. Никогда не переспрашивай то,
+что уже есть в досье.""",
+    },
 }
 
+MODES["project"]["tools"] = [WEB_SEARCH_TOOL] + tools.SCHEMAS
 
-def _system_for(mode: str, project_name: str | None, project_desc: str | None) -> str:
-    cfg = MODES.get(mode, MODES["assistant"])
+
+def _system_for(cfg: dict, project_name: str | None, project_desc: str | None,
+                dossier: str = "", has_dossier_page: bool = False) -> str:
     now = datetime.now(config.ROME_TZ)
     weekdays = ["понедельник", "вторник", "среда", "четверг",
                 "пятница", "суббота", "воскресенье"]
@@ -143,6 +174,16 @@ def _system_for(mode: str, project_name: str | None, project_desc: str | None) -
                    f"Весь анализ веди в контексте этого проекта.")
         if project_desc:
             system += f"\nОписание проекта: {project_desc}"
+        if dossier:
+            system += ("\n\n=== ДОСЬЕ КЛИЕНТА (страница проекта в Notion) ===\n"
+                       f"{dossier}\n=== КОНЕЦ ДОСЬЕ ===")
+        elif has_dossier_page:
+            system += ("\n\nДосье клиента пока пустое — наполняй его через "
+                       "update_client_memory по ходу работы.")
+        else:
+            system += ("\n\nДосье клиента не настроено (нет NOTION_CLIENTS_PAGE_ID) — "
+                       "память между чатами проекта недоступна; если Юлия на неё "
+                       "рассчитывает, честно скажи об этом и подскажи настройку.")
     return system
 
 
@@ -152,12 +193,36 @@ def _extract_text(content: list) -> str:
 
 async def run_chat(mode: str, messages: list[dict],
                    project_name: str | None = None,
-                   project_desc: str | None = None) -> str:
-    """Прогнать историю чата через агентный цикл выбранного режима."""
-    cfg = MODES.get(mode, MODES["assistant"])
-    system = _system_for(mode, project_name, project_desc)
+                   project_desc: str | None = None,
+                   project_page_id: str | None = None) -> str:
+    """Прогнать историю чата через агентный цикл выбранного режима.
+
+    Чат внутри проекта всегда идёт единым агентом «project» (все инструменты
+    + досье клиента из Notion), независимо от режима, записанного у чата.
+    """
+    is_project = bool(project_name or project_page_id)
+    cfg = MODES["project"] if is_project else MODES.get(mode, MODES["assistant"])
+
+    dossier = ""
+    if project_page_id:
+        try:
+            dossier = await notion_service.get_page_text(project_page_id)
+        except Exception:
+            logger.exception("Не удалось прочитать досье проекта %s", project_page_id)
+
+    system = _system_for(cfg, project_name, project_desc,
+                         dossier=dossier, has_dossier_page=bool(project_page_id))
     convo = list(messages)
 
+    # инструменты берут страницу-досье из contextvar (изолировано на запрос)
+    ctx_token = tool_context.CURRENT_PROJECT_PAGE.set(project_page_id)
+    try:
+        return await _agent_loop(cfg, system, convo)
+    finally:
+        tool_context.CURRENT_PROJECT_PAGE.reset(ctx_token)
+
+
+async def _agent_loop(cfg: dict, system: str, convo: list[dict]) -> str:
     # режим без инструментов (переводчик) — один вызов
     if not cfg["tools"]:
         response = await client.messages.create(

@@ -9,6 +9,7 @@ import re
 
 import config
 from services import notion as notion_service
+from tools import context
 
 MAX_TABLE_ROWS = 98          # + строка заголовка ≤ лимита Notion в 100 детей блока
 MAX_TEXT_CHUNK = 1900        # лимит Notion на rich_text: 2000 символов
@@ -119,7 +120,8 @@ def markdown_to_blocks(md: str) -> list[dict]:
 
 
 async def _save_to_notion(inp: dict) -> str:
-    if not config.NOTION_MATERIALS_PAGE_ID:
+    parent = context.CURRENT_PROJECT_PAGE.get()   # чат в проекте → в досье клиента
+    if not parent and not config.NOTION_MATERIALS_PAGE_ID:
         return ("Локация для материалов не настроена. Скажи Юлии: нужно создать "
                 "в Notion страницу «Материалы Паола App», расшарить её интеграции "
                 "бота (⋯ → Connections) и добавить её ID в переменную окружения "
@@ -128,8 +130,9 @@ async def _save_to_notion(inp: dict) -> str:
     blocks = markdown_to_blocks(inp.get("content") or "")
     if not blocks:
         return "Содержимое пустое — сохранять нечего."
-    url = await notion_service.create_material_page(title, blocks)
-    return f"Страница «{title}» создана в Notion.\nСсылка: {url}"
+    url = await notion_service.create_material_page(title, blocks, parent_page_id=parent)
+    where = "в досье проекта" if parent else "в «Материалах»"
+    return f"Страница «{title}» создана {where}.\nСсылка: {url}"
 
 
 TOOLS = [
@@ -139,11 +142,13 @@ TOOLS = [
             "description": (
                 "Сохранить объёмный структурный материал (сравнительную таблицу, "
                 "отчёт, результаты research, разбор бизнес-модели) страницей в Notion "
-                "и получить ссылку. Используй всегда, когда результат содержит таблицу "
-                "или длиннее ~30 строк: в чате такое нечитаемо. Markdown-таблицы "
-                "станут настоящими таблицами Notion. После вызова дай в чате краткий "
-                "вывод (3-5 предложений) и ссылку на страницу. Файлы (Excel, PDF) ты "
-                "создавать НЕ умеешь — это единственный способ выдать материал."
+                "и получить ссылку. Если чат в проекте — страница ляжет в досье "
+                "клиента, иначе в общие «Материалы». Используй всегда, когда результат "
+                "содержит таблицу или длиннее ~30 строк: в чате такое нечитаемо. "
+                "Markdown-таблицы станут настоящими таблицами Notion. После вызова "
+                "дай в чате краткий вывод (3-5 предложений) и ссылку на страницу. "
+                "Файлы (Excel, PDF) ты создавать НЕ умеешь — это единственный способ "
+                "выдать материал."
             ),
             "input_schema": {
                 "type": "object",
