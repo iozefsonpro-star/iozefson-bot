@@ -32,16 +32,74 @@ function esc(s) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-function renderMd(text) {
-  let t = esc(text);
-  t = t.replace(/```([\s\S]*?)```/g, (_, c) => `<code>${c.trim()}</code>`);
+function renderInline(t) {
   t = t.replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>");
   t = t.replace(/(^|\s)\*([^*\n]+)\*(?=\s|[.,;:!?)]|$)/g, "$1<i>$2</i>");
   t = t.replace(/`([^`\n]+)`/g, "<code>$1</code>");
-  t = t.replace(/(https?:\/\/[^\s<)]+)/g,
-    '<a href="$1" target="_blank" rel="noopener">$1</a>');
-  t = t.replace(/^[-•]\s+/gm, "• ");
+  t = t.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g,
+    '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  // голые URL; (^|[^">]) не даёт повторно обернуть href и текст готовых ссылок
+  t = t.replace(/(^|[^">])(https?:\/\/[^\s<)]+)/g,
+    '$1<a href="$2" target="_blank" rel="noopener">$2</a>');
   return t;
+}
+
+function isTableSep(line) {
+  const s = line.trim();
+  return /^\|?[\s:|-]+\|?$/.test(s) && s.includes("-");
+}
+
+function renderTable(rowLines) {
+  const rows = rowLines.map((l) => l.trim().replace(/^\|/, "").replace(/\|$/, "")
+    .split("|").map((c) => renderInline(c.trim())));
+  let html = '<div class="md-table"><table><thead><tr>'
+    + rows[0].map((c) => `<th>${c}</th>`).join("") + "</tr></thead><tbody>";
+  for (const r of rows.slice(1))
+    html += "<tr>" + r.map((c) => `<td>${c}</td>`).join("") + "</tr>";
+  return html + "</tbody></table></div>";
+}
+
+function renderMd(text) {
+  // код-блоки прячем в плейсхолдеры, чтобы их строки не считались таблицами
+  const fences = [];
+  const t = esc(text).replace(/```[^\n`]*\n?([\s\S]*?)```/g, (_, c) => {
+    fences.push(`<code>${c.trim()}</code>`);
+    return `\x00${fences.length - 1}\x00`;
+  });
+  const src = t.split("\n");
+  const parts = [];   // строки текста или {table: html}
+  for (let i = 0; i < src.length; i++) {
+    const s = src[i].trim();
+    if (s.startsWith("|") && i + 1 < src.length && isTableSep(src[i + 1])) {
+      const tbl = [src[i]];
+      i += 2;                                   // пропускаем |---|---|
+      while (i < src.length && src[i].trim().startsWith("|")) tbl.push(src[i++]);
+      i--;
+      parts.push({ table: renderTable(tbl) });
+    } else if (/^#{1,3}\s+/.test(s)) {
+      parts.push(`<b>${renderInline(s.replace(/^#{1,3}\s+/, ""))}</b>`);
+    } else {
+      parts.push(renderInline(src[i]).replace(/^\s*[-•]\s+/, "• "));
+    }
+  }
+  // .msg использует white-space:pre-wrap — таблицы вклеиваем без \n вокруг
+  // (отступы даёт margin у .md-table), иначе пустые строки markdown вокруг
+  // таблицы превращаются в лишние пустые полосы
+  let out = "";
+  let afterTable = false;
+  for (const p of parts) {
+    if (p.table !== undefined) {
+      out = out.replace(/\n+$/, "");
+      out += p.table;
+      afterTable = true;
+    } else {
+      if (afterTable && !p.trim()) continue;
+      out += p + "\n";
+      afterTable = false;
+    }
+  }
+  out = out.replace(/\n$/, "");
+  return out.replace(/\x00(\d+)\x00/g, (_, n) => fences[+n]);
 }
 
 /* ---------------- вход / выход ---------------- */

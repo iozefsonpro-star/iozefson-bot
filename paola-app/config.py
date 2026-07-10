@@ -19,6 +19,7 @@ NOTION_TODOLIST_DB_ID  = os.environ.get("NOTION_TODOLIST_DB_ID")   # Задач�
 NOTION_HABITS_DB_ID    = os.environ.get("NOTION_HABITS_DB_ID")     # Привычки
 NOTION_HABIT_LOG_DB_ID = os.environ.get("NOTION_HABIT_LOG_DB_ID")  # Журнал привычек
 NOTION_REMINDERS_DB_ID = os.environ.get("NOTION_REMINDERS_DB_ID")  # Напоминания
+NOTION_MATERIALS_PAGE_ID = os.environ.get("NOTION_MATERIALS_PAGE_ID")  # страница «Материалы» для research-страниц
 
 # --- Интеграции ---
 GOOGLE_TOKEN_JSON  = os.environ.get("GOOGLE_TOKEN_JSON")           # OAuth Google Calendar

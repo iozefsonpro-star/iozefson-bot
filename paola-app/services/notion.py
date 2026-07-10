@@ -279,3 +279,27 @@ async def get_pending_reminders() -> list[dict]:
 async def mark_reminder_sent(page_id: str) -> None:
     await notion.pages.update(page_id=page_id,
                               properties={"Отправлено": {"checkbox": True}})
+
+
+# ---------------------------------------------------------------------------
+# Материалы: страницы с результатами research/анализа
+# ---------------------------------------------------------------------------
+
+async def create_material_page(title: str, blocks: list[dict]) -> str:
+    """Создать страницу-материал внутри страницы «Материалы», вернуть URL.
+
+    Notion принимает максимум 100 блоков за запрос — остальные дописываются
+    батчами через blocks.children.append.
+    """
+    if not config.NOTION_MATERIALS_PAGE_ID:
+        raise RuntimeError("NOTION_MATERIALS_PAGE_ID не задан")
+    first, rest = blocks[:100], blocks[100:]
+    page = await notion.pages.create(
+        parent={"page_id": config.NOTION_MATERIALS_PAGE_ID},
+        properties={"title": {"title": [{"text": {"content": title[:200]}}]}},
+        children=first,
+    )
+    for i in range(0, len(rest), 100):
+        await notion.blocks.children.append(block_id=page["id"],
+                                            children=rest[i:i + 100])
+    return page.get("url", "")

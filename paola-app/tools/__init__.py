@@ -5,7 +5,7 @@
   handler — async функция (dict) -> str
 Добавление функции приложению = добавление одного инструмента здесь.
 """
-from tools import tasks, calendar_tools, habits, reminders, translate, board
+from tools import tasks, calendar_tools, habits, reminders, translate, board, materials
 
 ALL_TOOLS = (
     tasks.TOOLS
@@ -14,6 +14,7 @@ ALL_TOOLS = (
     + reminders.TOOLS
     + translate.TOOLS
     + board.TOOLS
+    + materials.TOOLS
 )
 
 SCHEMAS  = [t["schema"] for t in ALL_TOOLS]

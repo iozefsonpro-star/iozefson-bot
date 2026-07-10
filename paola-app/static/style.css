@@ -216,6 +216,15 @@ h2{font-family:var(--display);font-size:22px;font-weight:500;margin:0}
 .msg{padding:11px 15px;font-size:14.5px;line-height:1.55;overflow-wrap:break-word;
      white-space:pre-wrap}
 .msg a{color:var(--accent)}
+.msg{min-width:0;max-width:100%}
+.msg .md-table{overflow-x:auto;white-space:normal;margin:8px 0;max-width:100%;
+               -webkit-overflow-scrolling:touch;border-radius:10px;
+               border:1px solid var(--line-2)}
+.msg .md-table table{border-collapse:collapse;font-size:12.5px;line-height:1.4}
+.msg .md-table th,.msg .md-table td{border:1px solid var(--line-2);padding:6px 9px;
+     text-align:left;vertical-align:top;min-width:88px;max-width:240px}
+.msg .md-table th{background:var(--tag-bg);font-weight:600;white-space:nowrap}
+.msg .md-table tr:nth-child(even) td{background:rgba(217,226,234,.35)}
 .msg.user{background:var(--accent);color:var(--on-accent);
           border-radius:20px 20px 6px 20px}
 .msg.assistant{background:var(--surface);border:1px solid var(--line-2);color:var(--ink);
