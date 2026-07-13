@@ -1,5 +1,5 @@
 """Инструменты агента: задачи в Notion (общая база с Second Brain)."""
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import config
 from services import notion
@@ -22,6 +22,12 @@ async def _list_tasks(inp: dict) -> str:
         tasks = [t for t in await notion.get_active_tasks()
                  if t.get("deadline", "")[:10] == today]
         header = "Задачи на сегодня"
+    elif scope == "done":
+        now = datetime.now(config.ROME_TZ)
+        week_ago = (now - timedelta(days=7)).strftime("%Y-%m-%d")
+        tasks = await notion.get_done_between(
+            f"{week_ago}T00:00:00", now.strftime("%Y-%m-%dT%H:%M:%S"))
+        header = "Закрытые за последние 7 дней"
     else:
         tasks = await notion.get_active_tasks()
         header = "Активные задачи"
@@ -67,6 +73,11 @@ async def _create_task(inp: dict) -> str:
 async def _close_task(inp: dict) -> str:
     await notion.close_task(inp["task_id"])
     return "Задача закрыта (Done)."
+
+
+async def _delete_task(inp: dict) -> str:
+    await notion.delete_task(inp["task_id"])
+    return "Задача удалена (страница ушла в архив Notion)."
 
 
 async def _reschedule_task(inp: dict) -> str:
@@ -117,14 +128,17 @@ TOOLS = [
     {
         "schema": {
             "name": "list_tasks",
-            "description": "Показать задачи Юлии из Notion. Используй перед закрытием или "
-                           "переносом задачи, чтобы получить её id.",
+            "description": "Показать задачи Юлии из Notion. Используй перед закрытием, "
+                           "удалением или переносом задачи, чтобы получить её id.",
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "scope": {"type": "string", "enum": ["active", "today", "overdue"],
+                    "scope": {"type": "string",
+                              "enum": ["active", "today", "overdue", "done"],
                               "description": "active — все активные; today — с дедлайном "
-                                             "сегодня; overdue — просроченные"},
+                                             "сегодня; overdue — просроченные; done — "
+                                             "закрытые за последние 7 дней (чтобы найти "
+                                             "задачу, закрытую по ошибке)"},
                 },
                 "required": [],
             },
@@ -169,7 +183,10 @@ TOOLS = [
     {
         "schema": {
             "name": "close_task",
-            "description": "Закрыть задачу (статус Done). Сначала найди её id через list_tasks.",
+            "description": "Закрыть задачу как ВЫПОЛНЕННУЮ (статус Done). Только когда "
+                           "задача сделана: «сделала», «готово», «закрой». Если Юлия просит "
+                           "удалить/убрать/снести задачу — это delete_task, НЕ close_task. "
+                           "Сначала найди её id через list_tasks.",
             "input_schema": {
                 "type": "object",
                 "properties": {"task_id": {"type": "string"}},
@@ -177,6 +194,22 @@ TOOLS = [
             },
         },
         "handler": _close_task,
+    },
+    {
+        "schema": {
+            "name": "delete_task",
+            "description": "Удалить задачу насовсем — страница уходит в архив Notion, в "
+                           "статистику выполненных не попадает. Используй, когда Юлия говорит "
+                           "«удали», «убери», «эта задача не нужна» — задача не выполнена, а "
+                           "просто лишняя. Не подменяй закрытием (close_task). Работает и для "
+                           "уже закрытой задачи (её id ищи через list_tasks scope=done).",
+            "input_schema": {
+                "type": "object",
+                "properties": {"task_id": {"type": "string"}},
+                "required": ["task_id"],
+            },
+        },
+        "handler": _delete_task,
     },
     {
         "schema": {

@@ -108,6 +108,11 @@ async def close_task(page_id: str) -> None:
                               properties={"Статус": {"select": {"name": "Done"}}})
 
 
+async def delete_task(page_id: str) -> None:
+    """Удалить задачу — страница уходит в архив Notion (в базе не видна)."""
+    await notion.pages.update(page_id=page_id, archived=True)
+
+
 async def reschedule_task(page_id: str, new_date: str) -> None:
     await notion.pages.update(page_id=page_id,
                               properties={"Дедлайн": {"date": {"start": new_date}}})
