@@ -126,6 +126,7 @@ function showApp() {
   loadOverview();
   loadAnalytics();
   loadDayStatus();
+  syncProjects();   // подтянуть папки из Notion при открытии приложения
 }
 
 $("#login-form").addEventListener("submit", async (e) => {
@@ -155,6 +156,7 @@ function switchView(name) {
   $$(".tab").forEach((t) => t.classList.toggle("active", t.dataset.view === name));
   if (name === "chat" && !CURRENT_CHAT) openDefaultChat();
   if (name === "analytics") loadAnalyticsView();
+  if (name === "projects") syncProjects();
   window.scrollTo(0, 0);
 }
 
@@ -532,6 +534,18 @@ async function loadOverview(selectChatId) {
   renderChips();
   renderProjects();
   if (selectChatId) await openChat(selectChatId);
+}
+
+// Обратная синхронизация с Notion: подтянуть папки «Клиенты» → проекты.
+// Тихо: если Notion недоступен или не настроен — работаем на локальных проектах.
+async function syncProjects() {
+  try {
+    const r = await api("/api/projects/sync", { method: "POST" });
+    if (r.adopted || r.renamed) await loadOverview();
+    return r;
+  } catch (_) {
+    return null;
+  }
 }
 
 function chatsInContext() {
@@ -1108,6 +1122,27 @@ $("#new-project-btn").addEventListener("click", () => {
   $("#dlg-project-name").value = "";
   $("#dlg-project-desc").value = "";
   $("#dlg-project").showModal();
+});
+
+$("#sync-projects-btn").addEventListener("click", async () => {
+  const btn = $("#sync-projects-btn");
+  btn.classList.add("spinning");
+  btn.disabled = true;
+  const r = await syncProjects();
+  btn.classList.remove("spinning");
+  btn.disabled = false;
+  if (r && r.configured === false) {
+    alert("Синхронизация с Notion не настроена: добавь переменную "
+        + "NOTION_CLIENTS_PAGE_ID и расшарь страницу «Клиенты Паола App» "
+        + "интеграции бота.");
+  } else if (r && (r.adopted || r.renamed)) {
+    const bits = [];
+    if (r.adopted) bits.push(`подтянуто папок: ${r.adopted}`);
+    if (r.renamed) bits.push(`обновлено названий: ${r.renamed}`);
+    alert("Готово — " + bits.join(", ") + ".");
+  } else if (r) {
+    alert("Всё синхронизировано — новых папок в Notion нет.");
+  }
 });
 
 $("#dlg-project-form").addEventListener("submit", async (e) => {

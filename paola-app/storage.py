@@ -103,6 +103,43 @@ def _create_project(conn, name: str, description: str = "") -> dict:
     return {"id": pid, "name": name, "description": description}
 
 
+def _sync_projects(conn, pages: list[dict]) -> dict:
+    """Свести дочерние страницы «Клиенты» из Notion с проектами приложения.
+
+    Notion → приложение (обратное направление к _create_project):
+      • страница, которой ещё нет ни у одного проекта, становится новым
+        проектом (adopt) — так папки, заведённые вручную в Notion, появляются
+        в списке проектов;
+      • у уже связанного проекта подхватывается переименование страницы.
+    Приложение узнаёт «свои» страницы по notion_page_id, поэтому досье,
+    созданные самим приложением, повторно не заводятся. Возвращает сводку.
+    """
+    linked = {}
+    for row in conn.execute(
+            "SELECT id, name, notion_page_id FROM projects "
+            "WHERE notion_page_id IS NOT NULL").fetchall():
+        linked[row["notion_page_id"].replace("-", "")] = row
+    adopted, renamed = [], 0
+    for p in pages:
+        norm = p["id"].replace("-", "")
+        row = linked.get(norm)
+        if row is None:
+            pid = uuid.uuid4().hex
+            name = (p.get("title") or "").strip() or "Клиент"
+            conn.execute(
+                "INSERT INTO projects (id, name, description, created_at, "
+                "notion_page_id, notion_url) VALUES (?,?,?,?,?,?)",
+                (pid, name, "", _now(), p["id"], p.get("url", "")))
+            adopted.append({"id": pid, "name": name})
+        else:
+            title = (p.get("title") or "").strip()
+            if title and title != row["name"]:
+                conn.execute("UPDATE projects SET name=? WHERE id=?", (title, row["id"]))
+                renamed += 1
+    conn.commit()
+    return {"adopted": adopted, "renamed": renamed}
+
+
 def _overview(conn) -> dict:
     """Проекты с их чатами + отдельные чаты (вне проектов)."""
     projects = []
@@ -182,6 +219,7 @@ def _add_message(conn, chat_id: str, role: str, content: str) -> None:
 
 create_project     = _run(_create_project)
 set_project_notion = _run(_set_project_notion)
+sync_projects      = _run(_sync_projects)
 overview       = _run(_overview)
 create_chat    = _run(_create_chat)
 get_chat       = _run(_get_chat)

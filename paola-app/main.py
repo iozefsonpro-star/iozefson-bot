@@ -519,6 +519,26 @@ async def post_project(body: ProjectBody):
     return project
 
 
+@app.post("/api/projects/sync")
+async def sync_projects():
+    """Обратная синхронизация: подтянуть папки из «Клиенты Паола App» в Notion.
+
+    Папки, созданные там вручную, становятся проектами; переименования
+    подхватываются. Ошибка Notion не критична — вернём configured=False,
+    приложение продолжит работать на локальных проектах.
+    """
+    if not config.NOTION_CLIENTS_PAGE_ID:
+        return {"configured": False, "adopted": 0, "renamed": 0}
+    try:
+        pages = await notion.get_child_pages(config.NOTION_CLIENTS_PAGE_ID)
+    except Exception as e:
+        logger.error("Не удалось прочитать «Клиенты»: %s", _notion_hint(e))
+        raise HTTPException(status_code=502, detail=_notion_hint(e))
+    result = await storage.sync_projects(pages)
+    return {"configured": True,
+            "adopted": len(result["adopted"]), "renamed": result["renamed"]}
+
+
 class ChatCreateBody(BaseModel):
     mode: str
     project_id: str | None = None

@@ -344,6 +344,32 @@ async def create_dossier_page(name: str, description: str = "") -> dict:
     return {"id": page["id"], "url": page.get("url", "")}
 
 
+async def get_child_pages(page_id: str) -> list[dict]:
+    """Дочерние страницы (child_page) заданной страницы: id, title, url.
+
+    Нужна для обратной синхронизации: папки, заведённые вручную под «Клиенты»,
+    приложение подхватывает как проекты. URL собираем из id — короткая форма
+    notion.so/<id> открывает ту же страницу (Notion редиректит на слаг).
+    """
+    pages: list[dict] = []
+    cursor = None
+    while True:
+        kwargs = {"start_cursor": cursor} if cursor else {}
+        resp = await notion.blocks.children.list(block_id=page_id, **kwargs)
+        for b in resp.get("results", []):
+            if b.get("type") == "child_page":
+                pid = b["id"]
+                pages.append({
+                    "id": pid,
+                    "title": b.get("child_page", {}).get("title", ""),
+                    "url": "https://www.notion.so/" + pid.replace("-", ""),
+                })
+        if not resp.get("has_more"):
+            break
+        cursor = resp.get("next_cursor")
+    return pages
+
+
 async def append_dossier_facts(page_id: str, facts: list[str]) -> None:
     stamp = datetime.now(config.ROME_TZ).strftime("%d.%m.%Y")
     children = [{"type": "bulleted_list_item", "bulleted_list_item": {"rich_text": [

@@ -118,6 +118,7 @@ h2{font-family:var(--display);font-size:22px;font-weight:500;margin:0}
 .seg-btn.active{background:var(--accent);color:var(--on-accent)}
 
 .cal-head-actions{display:flex;align-items:center;gap:8px}
+.proj-head-actions{display:flex;align-items:center;gap:10px}
 .icon-btn{border:1px solid var(--line-strong);background:none;border-radius:999px;
          width:30px;height:30px;font-size:16px;line-height:1;color:var(--muted-2);
          display:flex;align-items:center;justify-content:center}

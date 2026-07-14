@@ -110,10 +110,13 @@
   <section id="view-projects" class="view hidden">
     <div class="section-head view-title">
       <h2>Проекты</h2>
-      <button id="new-project-btn" class="pill pill-ghost" type="button">＋ проект</button>
+      <div class="proj-head-actions">
+        <button id="sync-projects-btn" class="icon-btn" type="button" aria-label="Подтянуть из Notion" title="Подтянуть папки из Notion">↻</button>
+        <button id="new-project-btn" class="pill pill-ghost" type="button">＋ проект</button>
+      </div>
     </div>
     <div id="projects-list" class="projects"></div>
-    <p id="projects-empty" class="empty hidden">Проектов пока нет. Создай папку под клиента — чаты внутри получат его контекст автоматически.</p>
+    <p id="projects-empty" class="empty hidden">Проектов пока нет. Создай папку под клиента здесь или в Notion (внутри «Клиенты Паола App») — синхронизируется автоматически, чаты внутри получат его контекст.</p>
   </section>
 
   <!-- ===== АНАЛИТИКА ===== -->
