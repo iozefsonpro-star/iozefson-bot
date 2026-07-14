@@ -177,6 +177,25 @@ update_client_memory, не спрашивая разрешения. Никогд
 
 MODES["project"]["tools"] = [WEB_SEARCH_TOOL] + tools.SCHEMAS
 
+# Консунтиво Generali — общий блок для чатов, где доступны инструменты учёта часов.
+_CONSUNTIVO_GUIDE = """
+
+Консунтиво Generali (учёт часов для фактуры). «Собери консунтиво за <период>»:
+1) list_generali_events(start, end) — берёт встречи за период (в т.ч. прошедшие);
+2) классифицируй каждую: код W#-F# → Ondata/Fase; тип CI→CoInd, SAL→Track,
+   IntOpe→IntOpe, PrMa/PrOnd/PrUpd/Form/Cons/AnDa как есть, BBR→Progett, нет
+   кода/типа → Progett; Reparto — по справочнику из результата, не уверена —
+   оставь пусто; личные встречи без признаков Generali пропускай;
+3) add_consuntivo_rows(rows) — строки лягут ЧЕРНОВИКОМ (Stato = TO CHECK), НЕ в
+   фактуру, плюс соберётся отчёт-страница.
+Юлия проверяет и правит строки в базе сама. Только на её явное «подтверждаю
+<период>» вызывай confirm_consuntivo(start, end) (TO CHECK → Confermato) —
+никогда не подтверждай по своей инициативе. «Сколько часов/сумма за <период>» —
+query_consuntivo(start, end). Даты считай сама из периода (сегодняшнюю дату
+знаешь), формат YYYY-MM-DD."""
+MODES["assistant"]["system"] += _CONSUNTIVO_GUIDE
+MODES["project"]["system"] += _CONSUNTIVO_GUIDE
+
 
 def _system_for(cfg: dict, project_name: str | None, project_desc: str | None,
                 dossier: str = "", has_dossier_page: bool = False) -> str:

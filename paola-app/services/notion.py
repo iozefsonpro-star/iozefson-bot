@@ -370,6 +370,142 @@ async def get_child_pages(page_id: str) -> list[dict]:
     return pages
 
 
+# ---------------------------------------------------------------------------
+# Консунтиво Generali: учёт часов и биллинг (базы под страницей клиента Generali)
+# Consuntivo Generali — строки-активности, Tariffe — ставки, Reparti — справочник.
+# ---------------------------------------------------------------------------
+
+# Строки, которые считаются подтверждёнными для фактуры (черновик TO CHECK — нет).
+CONSUNTIVO_BILLABLE = ("Done", "Confermato", "Fatturato")
+
+
+def _sel(props: dict, name: str) -> str:
+    return (props.get(name, {}).get("select") or {}).get("name", "")
+
+
+def _num(props: dict, name: str):
+    return props.get(name, {}).get("number")
+
+
+async def get_reparti() -> list[dict]:
+    """Справочник департаментов Generali: reparto → wave, responsabile, gruppo, fase."""
+    if not config.NOTION_REPARTI_DB_ID:
+        return []
+    pages = await _query_all(config.NOTION_REPARTI_DB_ID)
+    out = []
+    for p in pages:
+        props = p.get("properties", {})
+        name = _rich_to_text(props.get("Reparto", {}).get("title", []))
+        if name:
+            out.append({
+                "reparto": name,
+                "wave": _sel(props, "Wave"),
+                "responsabile": _rich_to_text(props.get("Responsabile", {}).get("rich_text", [])),
+                "gruppo": _sel(props, "Gruppo"),
+                "fase": _sel(props, "Fase"),
+            })
+    return out
+
+
+async def get_tariffe() -> dict[str, float]:
+    """Тарифная карта: тип активности → ставка €/час."""
+    if not config.NOTION_TARIFFE_DB_ID:
+        return {}
+    pages = await _query_all(config.NOTION_TARIFFE_DB_ID)
+    rates: dict[str, float] = {}
+    for p in pages:
+        props = p.get("properties", {})
+        tipo = _rich_to_text(props.get("Tipo", {}).get("title", []))
+        rate = _num(props, "Rate")
+        if tipo:
+            rates[tipo] = rate if rate is not None else 0.0
+    return rates
+
+
+def _parse_consuntivo(page: dict) -> dict:
+    props = page.get("properties", {})
+    return {
+        "id":        page["id"],
+        "attivita":  _rich_to_text(props.get("Attività", {}).get("title", [])),
+        "data":      (props.get("Data", {}).get("date") or {}).get("start", ""),
+        "ondata":    _sel(props, "Ondata"),
+        "fase":      _sel(props, "Fase"),
+        "tipo":      _sel(props, "Tipo"),
+        "reparto":   _sel(props, "Reparto"),
+        "mese":      _sel(props, "Mese"),
+        "ore":       _num(props, "Ore") or 0.0,
+        "prezzo":    _num(props, "Prezzo") or 0.0,
+        "stato":     _sel(props, "Stato"),
+        "inizio":    _rich_to_text(props.get("Inizio", {}).get("rich_text", [])),
+    }
+
+
+async def query_consuntivo(start_iso: str, end_iso: str,
+                           statuses: tuple[str, ...] | None = None) -> list[dict]:
+    """Строки консунтиво с датой в [start; end]. statuses=None — все статусы."""
+    if not config.NOTION_CONSUNTIVO_DB_ID:
+        return []
+    date_filter = [
+        {"property": "Data", "date": {"on_or_after": start_iso}},
+        {"property": "Data", "date": {"on_or_before": end_iso}},
+    ]
+    if statuses:
+        date_filter.append({"or": [
+            {"property": "Stato", "select": {"equals": s}} for s in statuses]})
+    pages = await _query_all(config.NOTION_CONSUNTIVO_DB_ID,
+                             filter={"and": date_filter})
+    return [_parse_consuntivo(p) for p in pages]
+
+
+async def consuntivo_existing_keys(start_iso: str, end_iso: str) -> set[tuple[str, str, str]]:
+    """Ключи (дата, начало, название) уже занесённых строк — чтобы не дублировать
+    при повторном сборе периода."""
+    rows = await query_consuntivo(start_iso, end_iso)
+    return {(r["data"], r["inizio"], r["attivita"].strip().lower()) for r in rows}
+
+
+async def create_consuntivo_rows(rows: list[dict]) -> int:
+    """Создать строки консунтиво со статусом TO CHECK (черновик на проверку).
+
+    Каждый row: attivita, data (YYYY-MM-DD), inizio, fine, ore (float),
+    prezzo (float|None), tipo, reparto, ondata, fase, fase_nome, mese.
+    Пустые поля пропускаются. Возвращает число созданных строк.
+    """
+    created = 0
+    for r in rows:
+        props: dict = {
+            "Attività": {"title": [{"text": {"content": (r.get("attivita") or "(без названия)")[:2000]}}]},
+            "Stato":    {"select": {"name": "TO CHECK"}},
+        }
+        if r.get("data"):
+            props["Data"] = {"date": {"start": r["data"]}}
+        for key, field in (("ondata", "Ondata"), ("fase", "Fase"),
+                           ("tipo", "Tipo"), ("reparto", "Reparto"), ("mese", "Mese")):
+            if r.get(key):
+                props[field] = {"select": {"name": r[key]}}
+        for key, field in (("inizio", "Inizio"), ("fine", "Fine"),
+                           ("fase_nome", "Fase nome")):
+            if r.get(key):
+                props[field] = {"rich_text": [{"text": {"content": str(r[key])[:2000]}}]}
+        if r.get("ore") is not None:
+            props["Ore"] = {"number": round(float(r["ore"]), 4)}
+        if r.get("prezzo") is not None:
+            props["Prezzo"] = {"number": round(float(r["prezzo"]), 4)}
+        await notion.pages.create(
+            parent={"database_id": config.NOTION_CONSUNTIVO_DB_ID}, properties=props)
+        created += 1
+    return created
+
+
+async def confirm_consuntivo_period(start_iso: str, end_iso: str) -> int:
+    """Перевести черновики TO CHECK за период в Confermato. Возвращает число строк."""
+    rows = await query_consuntivo(start_iso, end_iso, statuses=("TO CHECK",))
+    for r in rows:
+        await notion.pages.update(
+            page_id=r["id"], properties={"Stato": {"select": {"name": "Confermato"}}})
+    return len(rows)
+
+
 async def append_dossier_facts(page_id: str, facts: list[str]) -> None:
     stamp = datetime.now(config.ROME_TZ).strftime("%d.%m.%Y")
     children = [{"type": "bulleted_list_item", "bulleted_list_item": {"rich_text": [

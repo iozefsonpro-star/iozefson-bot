@@ -26,7 +26,10 @@ GCAL_EMOJI = {
 # (R9, R12 и т.п.) не нужны в бизнес-сводке. «My calendar» оставлен как личный Юлии.
 GCAL_SKIP = {"Tasks", "Ciclo Yuliya", "Астро-календарь", "Work Vin", "Vita"}
 # Отдельные события, которые прячем по названию независимо от календаря.
-GCAL_SKIP_TITLES = {"BBR"}
+# Сравнение идёт по title.strip().upper(), поэтому значения — в верхнем регистре.
+# «Yulia a Monza» — технические встречи присутствия, не нужны в бизнес-сводке.
+# (Раньше здесь был BBR; теперь BBR — рабочий Progett и в сводках показывается.)
+GCAL_SKIP_TITLES = {"YULIA A MONZA"}
 GENERALI_DOMAIN = "@agmonza.it"
 # События длиной от стольких дней (курсы, периоды) — не встречи в сетке дня,
 # а отдельный блок «В процессе» с датой окончания. Как LONG_EVENT_DAYS в боте.
@@ -171,6 +174,81 @@ async def get_events_full(days: int = 0, from_now: bool = False) -> dict:
 async def get_events(days: int = 0, from_now: bool = False) -> list[dict]:
     """Только встречи (без долгих событий). days=0 — только сегодня."""
     return (await get_events_full(days, from_now))["events"]
+
+
+# ---------------------------------------------------------------------------
+# Консунтиво: выборка событий за произвольный период, включая прошедшее.
+# Обычная сводка смотрит только с начала сегодняшнего дня — для учёта часов
+# нужны именно прошедшие встречи (например, весь июль), поэтому timeMin
+# ставится в прошлое. Возвращаем «сырые» встречи с флагом Generali для
+# классификации агентом (парсинг кодов W#-F#, BBR→Progett и т.п.).
+# ---------------------------------------------------------------------------
+
+def _fetch_range_sync(start_iso: str, end_iso: str) -> list[dict]:
+    with _gcal_lock:
+        service = _get_service_sync()
+        if not service:
+            return []
+        time_min = datetime.fromisoformat(start_iso).replace(
+            hour=0, minute=0, second=0, tzinfo=config.ROME_TZ)
+        time_max = datetime.fromisoformat(end_iso).replace(
+            hour=23, minute=59, second=59, tzinfo=config.ROME_TZ)
+        try:
+            calendars = service.calendarList().list().execute().get("items", [])
+        except Exception as e:
+            logger.error("Calendar list error: %s", e)
+            return []
+
+        out: list[dict] = []
+        for cal in calendars:
+            cal_name = cal.get("summary", "")
+            if cal_name in GCAL_SKIP:
+                continue
+            try:
+                items = service.events().list(
+                    calendarId=cal["id"], timeMin=time_min.isoformat(),
+                    timeMax=time_max.isoformat(), singleEvents=True,
+                    orderBy="startTime", maxResults=250,
+                ).execute().get("items", [])
+            except Exception as e:
+                logger.warning("Calendar '%s' range error: %s", cal_name, e)
+                continue
+
+            for ev in items:
+                title = ev.get("summary", "(без названия)")
+                if title.strip().upper() in GCAL_SKIP_TITLES:
+                    continue
+                if any(a.get("self") and a.get("responseStatus") == "declined"
+                       for a in ev.get("attendees", [])):
+                    continue
+                start_raw = ev["start"].get("dateTime")
+                end_raw   = ev["end"].get("dateTime")
+                if not start_raw or not end_raw:
+                    continue  # событие на весь день — не встреча для консунтиво
+                dt_start = datetime.fromisoformat(start_raw).astimezone(config.ROME_TZ)
+                dt_end   = datetime.fromisoformat(end_raw).astimezone(config.ROME_TZ)
+                hours = round((dt_end - dt_start).total_seconds() / 3600, 4)
+                generali = any(GENERALI_DOMAIN in a.get("email", "")
+                               for a in ev.get("attendees", []))
+                out.append({
+                    "title": title.strip(),
+                    "date": dt_start.date().isoformat(),
+                    "start": f"{dt_start:%H:%M}",
+                    "end": f"{dt_end:%H:%M}",
+                    "hours": hours,
+                    "generali": generali,
+                    "calendar": cal_name,
+                    "_sort": dt_start.isoformat(),
+                })
+        out.sort(key=lambda e: e["_sort"])
+        return out
+
+
+async def get_range_events(start_iso: str, end_iso: str) -> list[dict]:
+    """Встречи с временем начала/конца за период [start_iso; end_iso] (даты YYYY-MM-DD),
+    включая прошедшие. Для консунтиво: каждая — {title, date, start, end, hours,
+    generali, calendar}. Событий на весь день и «Yulia a Monza» здесь нет."""
+    return await asyncio.to_thread(_fetch_range_sync, start_iso, end_iso)
 
 
 def format_event(ev: dict) -> str:
