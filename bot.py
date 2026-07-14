@@ -1035,7 +1035,7 @@ def _get_calendar_events_fresh(days: int = 7, from_now: bool = False) -> dict:
 
                 for ev in result.get("items", []):
                     title = ev.get("summary", "(без названия)")
-                    if title.strip().upper() == "BBR":
+                    if title.strip().upper() == "YULIA A MONZA":
                         continue
 
                     start_raw = ev["start"].get("dateTime", ev["start"].get("date", ""))
