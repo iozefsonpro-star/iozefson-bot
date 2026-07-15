@@ -549,6 +549,10 @@ async def get_page_text(page_id: str, max_chars: int = 6000) -> str:
                     lines.append(" | ".join(_rich_to_text(c) for c in cells))
             elif t == "child_page":
                 lines.append(f"- [сохранённый материал] {b.get('child_page', {}).get('title', '')}")
+            elif t in ("file", "pdf", "image"):
+                caption = _rich_to_text(b[t].get("caption", []))
+                lines.append(f"- [прикреплённый файл, текст не извлекается]"
+                             f"{f' {caption}' if caption else ''}")
         if not resp.get("has_more"):
             break
         cursor = resp.get("next_cursor")
