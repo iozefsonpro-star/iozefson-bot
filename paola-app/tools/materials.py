@@ -119,6 +119,31 @@ def markdown_to_blocks(md: str) -> list[dict]:
     return blocks
 
 
+async def _read_material(inp: dict) -> str:
+    parent = context.CURRENT_PROJECT_PAGE.get()
+    if not parent:
+        return "Этот чат не привязан к проекту с досье — читать материалы неоткуда."
+    query = (inp.get("title") or "").strip().lower()
+    if not query:
+        return "Не указано название материала."
+    children = await notion_service.get_child_pages(parent)
+    matches = [c for c in children if query in c["title"].lower()]
+    if not matches:
+        available = ", ".join(f"«{c['title']}»" for c in children) or "материалов пока нет"
+        return (f"Подстраница с названием, похожим на «{inp.get('title')}», не найдена "
+                f"в досье. Есть: {available}.")
+    if len(matches) > 1:
+        titles = ", ".join(f"«{c['title']}»" for c in matches)
+        return f"Нашлось несколько подходящих подстраниц: {titles}. Уточни название."
+    page = matches[0]
+    text = await notion_service.get_page_text(page["id"], max_chars=12000)
+    if not text:
+        return (f"Подстраница «{page['title']}» найдена, но текста в ней нет — "
+                f"возможно, это загруженный файл (Notion-блок file/pdf/image), "
+                f"такое содержимое я прочитать не умею.")
+    return f"Материал «{page['title']}»:\n\n{text}"
+
+
 async def _save_to_notion(inp: dict) -> str:
     parent = context.CURRENT_PROJECT_PAGE.get()   # чат в проекте → в досье клиента
     if not parent and not config.NOTION_MATERIALS_PAGE_ID:
@@ -170,5 +195,31 @@ TOOLS = [
             },
         },
         "handler": _save_to_notion,
+    },
+    {
+        "schema": {
+            "name": "read_material",
+            "description": (
+                "Прочитать полный текст подстраницы досье проекта в Notion — "
+                "транскрипции встреч, заметок, других материалов, которые Юлия "
+                "сохранила вручную (в досье они видны строкой «[сохранённый "
+                "материал] <название>»). Используй, когда для ответа нужно "
+                "содержимое такой подстраницы, а не просто её название — вместо "
+                "того чтобы просить Юлию вставить текст в чат руками. Название "
+                "можно указать неточно — ищется по частичному совпадению."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "title": {
+                        "type": "string",
+                        "description": "Название подстраницы (или его часть), "
+                                       "например «транскрипция встречи» или «Bilancio».",
+                    },
+                },
+                "required": ["title"],
+            },
+        },
+        "handler": _read_material,
     },
 ]
