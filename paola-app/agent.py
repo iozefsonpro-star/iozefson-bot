@@ -187,7 +187,12 @@ _CONSUNTIVO_GUIDE = """
    кода/типа → Progett; Reparto — по справочнику из результата, не уверена —
    оставь пусто; личные встречи без признаков Generali пропускай;
 3) add_consuntivo_rows(rows) — строки лягут ЧЕРНОВИКОМ (Stato = TO CHECK), НЕ в
-   фактуру, плюс соберётся отчёт-страница.
+   фактуру, плюс соберётся отчёт-страница. ВАЖНО: если встреч много (целый
+   месяц), заноси порциями — вызывай add_consuntivo_rows несколько раз по
+   ~10 строк (например, по неделям), а не одним огромным вызовом, иначе ответ
+   оборвётся по длине;
+4) когда занесла ВСЕ строки периода — вызови consuntivo_report(start, end) один
+   раз: соберётся отчёт-страница и уйдёт пуш.
 Юлия проверяет и правит строки в базе сама. Только на её явное «подтверждаю
 <период>» вызывай confirm_consuntivo(start, end) (TO CHECK → Confermato) —
 никогда не подтверждай по своей инициативе. «Сколько часов/сумма за <период>» —
@@ -268,7 +273,7 @@ async def _agent_loop(cfg: dict, system: str, convo: list[dict]) -> str:
 
     for _ in range(MAX_TURNS):
         response = await client.messages.create(
-            model=cfg["model"], max_tokens=8000, system=system,
+            model=cfg["model"], max_tokens=16000, system=system,
             tools=cfg["tools"], messages=convo)
 
         if response.stop_reason == "pause_turn":
@@ -276,7 +281,16 @@ async def _agent_loop(cfg: dict, system: str, convo: list[dict]) -> str:
             continue
 
         if response.stop_reason != "tool_use":
-            return _extract_text(response.content) or "(пустой ответ)"
+            text = _extract_text(response.content)
+            if text:
+                return text
+            # Ответ без текста: если оборвался по длине — подскажем, а не молчим
+            # «(пустой ответ)» (например, слишком большой вызов инструмента).
+            if response.stop_reason == "max_tokens":
+                return ("Ответ получился слишком длинным и оборвался. Если это "
+                        "большая операция (например, консунтиво за целый месяц), "
+                        "попроси собрать её по частям — по неделям.")
+            return "(пустой ответ)"
 
         convo.append({"role": "assistant", "content": response.content})
         results = []

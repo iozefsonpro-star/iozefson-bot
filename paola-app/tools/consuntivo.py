@@ -181,23 +181,39 @@ async def _add_consuntivo_rows(inp: dict) -> str:
     created = await notion_service.create_consuntivo_rows(prepared)
     tot_ore = sum(r["ore"] for r in prepared)
     tot_eur = sum(r["prezzo"] for r in prepared)
-    label = _mese(start) if _mese(start) == _mese(end) else f"{start}…{end}"
+    dup_note = f" Пропущено дубликатов: {skipped}." if skipped else ""
+    return (f"Занесено черновиком (Stato = TO CHECK): {created} строк, "
+            f"{_fmt_hours(round(tot_ore, 2))}, €{tot_eur:.2f}.{dup_note} "
+            "Когда занесёшь весь период (все порции) — вызови consuntivo_report "
+            "для отчёта-витрины и пуша.")
 
+
+# ---------------------------------------------------------------------------
+# 2b. Отчёт-витрина за период (вызывается один раз после занесения всех строк)
+# ---------------------------------------------------------------------------
+
+async def _consuntivo_report(inp: dict) -> str:
+    start, end = inp.get("start"), inp.get("end")
+    if not (start and end):
+        return "Нужны start и end (даты YYYY-MM-DD) периода."
+    label = _mese(start) if _mese(start) == _mese(end) else f"{start}…{end}"
+    rows = await notion_service.query_consuntivo(start, end, statuses=("TO CHECK",))
+    if not rows:
+        return f"За {start}…{end} черновиков TO CHECK нет — отчёт собирать не из чего."
     try:
         url = await _build_report(start, end, label)
     except Exception:
         logger.exception("Не удалось собрать отчёт-страницу консунтиво")
-        url = ""
-
-    dup_note = f" Пропущено дубликатов: {skipped}." if skipped else ""
+        return ("Строки в базе есть, но отчёт-страница не собралась (ошибка Notion). "
+                "Проверить можно в базе Consuntivo Generali, вид «Da confermare».")
+    tot_ore = sum(r["ore"] for r in rows)
+    tot_eur = sum(r["prezzo"] for r in rows)
     await telegram.send_message(
-        f"🕓 Консунтиво Generali ({label}): собрала {created} встреч, "
-        f"{_fmt_hours(round(tot_ore, 2))}, €{tot_eur:.2f} — на проверку (TO CHECK)."
-        + (f"\n{url}" if url else ""))
-    return (f"Занесено черновиком (Stato = TO CHECK): {created} строк за {label}, "
-            f"{_fmt_hours(round(tot_ore, 2))}, €{tot_eur:.2f}.{dup_note}"
-            + (f" Отчёт-витрина: {url}" if url else "")
-            + " Проверь и правь в базе, затем скажи «подтверждаю» для перевода в Confermato.")
+        f"🕓 Консунтиво Generali ({label}): {len(rows)} встреч на проверку, "
+        f"{_fmt_hours(round(tot_ore, 2))}, €{tot_eur:.2f}.\n{url}")
+    return (f"Отчёт-витрина ({label}): {len(rows)} встреч на проверке, "
+            f"{_fmt_hours(round(tot_ore, 2))}, €{tot_eur:.2f}. {url} "
+            "Проверь и правь в базе, затем скажи «подтверждаю» — переведу в Confermato.")
 
 
 # ---------------------------------------------------------------------------
@@ -315,6 +331,24 @@ TOOLS = [
             },
         },
         "handler": _add_consuntivo_rows,
+    },
+    {
+        "schema": {
+            "name": "consuntivo_report",
+            "description": (
+                "Собрать отчёт-витрину (страница Notion + пуш) по черновикам "
+                "TO CHECK за период. Вызывай ОДИН раз после того, как занесла все "
+                "строки периода через add_consuntivo_rows. Даты — YYYY-MM-DD."),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "start": {"type": "string", "description": "Начало периода YYYY-MM-DD"},
+                    "end":   {"type": "string", "description": "Конец периода YYYY-MM-DD"},
+                },
+                "required": ["start", "end"],
+            },
+        },
+        "handler": _consuntivo_report,
     },
     {
         "schema": {
