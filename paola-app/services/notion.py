@@ -113,9 +113,11 @@ async def delete_task(page_id: str) -> None:
     await notion.pages.update(page_id=page_id, archived=True)
 
 
-async def reschedule_task(page_id: str, new_date: str) -> None:
-    await notion.pages.update(page_id=page_id,
-                              properties={"Дедлайн": {"date": {"start": new_date}}})
+async def reschedule_task(page_id: str, new_date: str | None) -> None:
+    """new_date=None — очистить дедлайн (задача становится без даты)."""
+    await notion.pages.update(
+        page_id=page_id,
+        properties={"Дедлайн": {"date": {"start": new_date} if new_date else None}})
 
 
 async def get_deadline_between(start_iso: str, end_iso: str,

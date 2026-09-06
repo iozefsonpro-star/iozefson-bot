@@ -184,14 +184,23 @@ async def complete_task(task_id: str):
     return {"ok": True}
 
 
+@app.delete("/api/tasks/{task_id}")
+async def delete_task(task_id: str):
+    try:
+        await notion.delete_task(task_id)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=_notion_hint(e))
+    return {"ok": True}
+
+
 class RescheduleBody(BaseModel):
-    new_date: str  # YYYY-MM-DD
+    new_date: str | None = None  # YYYY-MM-DD; None/пусто — очистить дедлайн
 
 
 @app.post("/api/tasks/{task_id}/reschedule")
 async def reschedule_task(task_id: str, body: RescheduleBody):
     try:
-        await notion.reschedule_task(task_id, body.new_date)
+        await notion.reschedule_task(task_id, body.new_date or None)
     except Exception as e:
         raise HTTPException(status_code=502, detail=_notion_hint(e))
     return {"ok": True}

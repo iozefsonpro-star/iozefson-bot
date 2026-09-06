@@ -167,31 +167,6 @@ async function loadCalendar(scope) {
         box.append(line);
       }
     }
-    // «Завтра» отвечает только на половину вопроса без задач с тем же дедлайном.
-    if (scope === "tomorrow") {
-      try {
-        const tomorrowIso = isoDateLocal(new Date(Date.now() + 86400000));
-        const t = await api("/api/tasks");
-        const dueTomorrow = t.other.filter((x) => (x.deadline || "").slice(0, 10) === tomorrowIso);
-        if (dueTomorrow.length) {
-          const h = document.createElement("div");
-          h.className = "cal-day";
-          h.textContent = "Задачи";
-          box.append(h);
-          for (const task of dueTomorrow) {
-            const line = document.createElement("div");
-            line.className = "cal-event";
-            const mark = document.createElement("span");
-            mark.className = "cal-time";
-            mark.textContent = "📋";
-            const title = document.createElement("span");
-            title.textContent = task.title;
-            line.append(mark, title);
-            box.append(line);
-          }
-        }
-      } catch (_) {}
-    }
   } catch (err) {
     box.textContent = "Не удалось загрузить календарь: " + err.message;
   }
@@ -257,7 +232,26 @@ function taskLi(t) {
   }
   li.append(meta);
 
+  const del = document.createElement("button");
+  del.type = "button";
+  del.className = "t-delete";
+  del.textContent = "✕";
+  del.setAttribute("aria-label", "Удалить задачу: " + t.title);
+  del.addEventListener("click", () => deleteTask(t, li));
+  li.append(del);
+
   return li;
+}
+
+async function deleteTask(t, li) {
+  if (!confirm(`Удалить задачу «${t.title}»?`)) return;
+  try {
+    await api(`/api/tasks/${t.id}`, { method: "DELETE" });
+    li.remove();
+    loadDayStatus();
+  } catch (err) {
+    alert("Не удалось удалить: " + err.message);
+  }
 }
 
 async function completeTask(taskId, li, check) {
@@ -286,8 +280,9 @@ function openRescheduleDialog(t) {
 $("#dlg-resched-form").addEventListener("submit", async (e) => {
   if (e.submitter && e.submitter.value === "cancel") return;
   if (!RESCHED_TASK) return;
-  const newDate = $("#dlg-resched-date").value;
-  if (!newDate) return;
+  const clearing = e.submitter && e.submitter.value === "clear";
+  const newDate = clearing ? null : $("#dlg-resched-date").value;
+  if (!clearing && !newDate) return;
   try {
     await api(`/api/tasks/${RESCHED_TASK.id}/reschedule`, {
       method: "POST", body: JSON.stringify({ new_date: newDate }),
