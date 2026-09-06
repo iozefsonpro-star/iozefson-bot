@@ -118,7 +118,9 @@ h2{font-family:var(--display);font-size:22px;font-weight:500;margin:0}
 .seg-btn.active{background:var(--accent);color:var(--on-accent)}
 
 .cal-head-actions{display:flex;align-items:center;gap:8px}
-.proj-head-actions{display:flex;align-items:center;gap:10px}
+.task-head-actions{display:flex;align-items:center;gap:10px}
+.pill-sm{padding:6px 12px;font-size:12.5px;min-height:32px}
+.pill-sm.active{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
 .icon-btn{border:1px solid var(--line-strong);background:none;border-radius:999px;
          width:30px;height:30px;font-size:16px;line-height:1;color:var(--muted-2);
          display:flex;align-items:center;justify-content:center}
@@ -175,6 +177,12 @@ h2{font-family:var(--display);font-size:22px;font-weight:500;margin:0}
 .habit .h-name{flex:1;color:var(--ink)}
 .habit .h-streak{font-family:var(--mono);font-size:11px;color:var(--muted);white-space:nowrap}
 .habit.done .h-name{color:var(--muted-2);text-decoration:line-through}
+.habit.habit-number{align-items:center}
+.habit-number .h-goal{display:flex;align-items:center;gap:6px;flex:none}
+.habit-number .h-value-input{width:64px;padding:6px 8px;border:1px solid var(--line-strong);
+      border-radius:10px;background:#fff;text-align:right}
+.habit-number .h-goal-label{font-size:12px;color:var(--muted);white-space:nowrap}
+.habit-number.goal-met .h-goal-label{color:var(--done);font-weight:600}
 
 /* напоминания */
 .reminders{list-style:none;padding:0;margin:0 0 4px;display:flex;flex-direction:column;gap:6px}
@@ -195,68 +203,6 @@ h2{font-family:var(--display);font-size:22px;font-weight:500;margin:0}
 @keyframes mic-pulse{0%,100%{box-shadow:0 0 0 0 rgba(192,80,56,.5)}
                      50%{box-shadow:0 0 0 8px rgba(192,80,56,0)}}
 @media (prefers-reduced-motion: reduce){.mic-btn.recording{animation:none}}
-
-/* ---------- чат ---------- */
-#view-chat{gap:12px}
-.chat-head{display:flex;align-items:center;gap:12px}
-.chat-head-txt{flex:1}
-.chat-head-name{font-family:var(--display);font-size:19px;font-weight:500}
-.chat-head-status{font-size:12.5px;color:var(--muted)}
-.chat-head-status a{color:var(--accent);text-decoration:none;font-weight:600}
-.chips{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;flex:none;
-       scrollbar-width:none}
-.chips::-webkit-scrollbar{display:none}
-.chip{border-radius:999px;padding:7px 14px;font-size:13px;white-space:nowrap;border:none;
-      background:var(--surface);color:var(--muted-2);border:1px solid var(--line-2);
-      min-height:36px}
-.chip.active{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
-.chip.chip-add{color:var(--accent);border-style:dashed}
-.chat-log{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:12px;min-height:0}
-.msg-row{display:flex;gap:8px;align-items:flex-end;max-width:92%}
-.msg-row.user{align-self:flex-end}
-.msg-row.assistant{align-self:flex-start}
-.msg{padding:11px 15px;font-size:14.5px;line-height:1.55;overflow-wrap:break-word;
-     white-space:pre-wrap}
-.msg a{color:var(--accent)}
-.msg{min-width:0;max-width:100%}
-.msg .md-table{overflow-x:auto;white-space:normal;margin:8px 0;max-width:100%;
-               -webkit-overflow-scrolling:touch;border-radius:10px;
-               border:1px solid var(--line-2)}
-.msg .md-table table{border-collapse:collapse;font-size:12.5px;line-height:1.4}
-.msg .md-table th,.msg .md-table td{border:1px solid var(--line-2);padding:6px 9px;
-     text-align:left;vertical-align:top;min-width:88px;max-width:240px}
-.msg .md-table th{background:var(--tag-bg);font-weight:600;white-space:nowrap}
-.msg .md-table tr:nth-child(even) td{background:rgba(217,226,234,.35)}
-.msg.user{background:var(--accent);color:var(--on-accent);
-          border-radius:20px 20px 6px 20px}
-.msg.assistant{background:var(--surface);border:1px solid var(--line-2);color:var(--ink);
-               border-radius:20px 20px 20px 6px}
-.msg.error{background:#F2DEDA;color:var(--overdue);border-radius:20px 20px 20px 6px}
-.typing{display:inline-flex;gap:4px;padding:14px 16px;background:var(--surface);
-        border:1px solid var(--line-2);border-radius:20px 20px 20px 6px}
-.typing i{width:7px;height:7px;border-radius:50%;background:var(--muted);
-          animation:paolaPulse 1.2s infinite}
-.typing i:nth-child(2){animation-delay:.2s}
-.typing i:nth-child(3){animation-delay:.4s}
-@keyframes paolaPulse{0%,100%{transform:scale(1);opacity:.85}50%{transform:scale(1.08);opacity:1}}
-.chat-input{display:flex;gap:10px;align-items:flex-end;flex:none}
-.chat-input textarea{flex:1;resize:none;padding:12px 18px;border:1px solid var(--line-2);
-                     border-radius:24px;background:var(--surface);max-height:140px;
-                     min-height:48px;line-height:1.4}
-.chat-input button{width:48px;height:48px;flex:none;border:none;background:var(--accent);
-                   color:var(--on-accent);border-radius:50%;font-size:19px;font-weight:700}
-.chat-input button:disabled{background:var(--line-strong)}
-
-/* ---------- проекты ---------- */
-.projects{display:flex;flex-direction:column;gap:12px}
-.project-card{background:var(--surface);border:1px solid var(--line);
-              border-radius:var(--r-cal);padding:14px 16px;display:flex;
-              flex-direction:column;gap:8px}
-.project-name{font-family:var(--display);font-size:18px;font-weight:500}
-.project-dossier{display:inline-block;font-size:12.5px;color:var(--accent);
-                 text-decoration:none;margin-top:2px}
-.project-desc{font-size:13px;color:var(--ink-2);margin:0}
-.project-chats{display:flex;flex-wrap:wrap;gap:8px}
 
 /* ---------- аналитика ---------- */
 .week-nav{display:flex;align-items:center;justify-content:space-between;gap:10px}
@@ -323,11 +269,15 @@ dialog::backdrop{background:rgba(31,39,49,.45)}
 .dlg-form input,.dlg-form select,.dlg-form textarea{padding:10px 14px;
     border:1px solid var(--line-strong);border-radius:14px;background:#fff}
 .dlg-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:4px}
+.task-input-row{display:flex;gap:8px;align-items:center}
+.task-input-row input{flex:1}
+.task-input-row .mic-btn{width:40px;height:40px;font-size:16px}
+.task-date-quick{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap}
+.dlg-comment{font-size:13px;color:var(--ink-2)}
+.dlg-comment summary{cursor:pointer;color:var(--accent);font-weight:600}
+.dlg-comment textarea{width:100%;margin-top:8px;padding:10px 14px;
+    border:1px solid var(--line-strong);border-radius:14px;background:#fff}
 
-@media (prefers-reduced-motion:no-preference){
-  .msg-row{animation:rise .18s ease-out}
-  @keyframes rise{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
-}
 @media (min-width:700px){
   .reminder-form{grid-template-columns:1fr auto auto}
 }

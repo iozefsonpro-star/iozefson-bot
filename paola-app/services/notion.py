@@ -167,7 +167,8 @@ async def get_done_between(start_iso: str, end_iso: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 async def get_habits() -> list[dict]:
-    """Активные привычки."""
+    """Активные привычки. Тип «Число» — цель считается достигнутой по значению
+    (Значение >= Цель число), «Да/Нет» — по чекбоксу Выполнено."""
     if not config.NOTION_HABITS_DB_ID:
         return []
     pages = await _query_all(
@@ -182,7 +183,10 @@ async def get_habits() -> list[dict]:
             habits.append({
                 "id": p["id"],
                 "name": name,
+                "type": (props.get("Тип", {}).get("select") or {}).get("name") or "Да/Нет",
                 "goal": _rich_to_text(props.get("Цель", {}).get("rich_text", [])),
+                "goal_number": props.get("Цель число", {}).get("number"),
+                "unit": _rich_to_text(props.get("Единица", {}).get("rich_text", [])),
             })
     return habits
 
@@ -204,11 +208,14 @@ async def get_habit_log(days: int = 30) -> list[dict]:
             "habit": _rich_to_text(props.get("Привычка", {}).get("rich_text", [])),
             "date":  (props.get("Дата", {}).get("date") or {}).get("start", ""),
             "done":  props.get("Выполнено", {}).get("checkbox", False),
+            "value": props.get("Значение", {}).get("number"),
+            "note":  _rich_to_text(props.get("Заметка", {}).get("rich_text", [])),
         })
     return entries
 
 
-async def log_habit(habit_name: str, day: str, done: bool) -> None:
+async def log_habit(habit_name: str, day: str, done: bool,
+                    value: float | None = None, note: str | None = None) -> None:
     """Отметить привычку за день. Если запись уже есть — обновляет её."""
     existing = await _query_all(
         config.NOTION_HABIT_LOG_DB_ID,
@@ -217,26 +224,37 @@ async def log_habit(habit_name: str, day: str, done: bool) -> None:
             {"property": "Привычка", "rich_text": {"equals": habit_name}},
         ]},
     )
+    properties: dict = {"Выполнено": {"checkbox": done}}
+    if value is not None:
+        properties["Значение"] = {"number": value}
+    if note is not None:
+        properties["Заметка"] = {"rich_text": [{"text": {"content": note[:2000]}}]}
     if existing:
-        await notion.pages.update(
-            page_id=existing[0]["id"],
-            properties={"Выполнено": {"checkbox": done}},
-        )
+        await notion.pages.update(page_id=existing[0]["id"], properties=properties)
         return
     await notion.pages.create(
         parent={"database_id": config.NOTION_HABIT_LOG_DB_ID},
         properties={
-            "Запись":    {"title": [{"text": {"content": f"{habit_name} — {day}"}}]},
-            "Привычка":  {"rich_text": [{"text": {"content": habit_name}}]},
-            "Дата":      {"date": {"start": day}},
-            "Выполнено": {"checkbox": done},
+            "Запись":   {"title": [{"text": {"content": f"{habit_name} — {day}"}}]},
+            "Привычка": {"rich_text": [{"text": {"content": habit_name}}]},
+            "Дата":     {"date": {"start": day}},
+            **properties,
         },
     )
 
 
-def habit_streak(entries: list[dict], habit_name: str, today: date) -> int:
-    """Текущая серия подряд выполненных дней для привычки."""
-    done_days = {e["date"] for e in entries if e["habit"] == habit_name and e["done"]}
+def habit_streak(entries: list[dict], habit_name: str, today: date,
+                 goal_number: float | None = None) -> int:
+    """Текущая серия подряд выполненных дней для привычки.
+
+    goal_number задан — привычка числовая, день засчитан при Значение >=
+    Цель число; иначе — по чекбоксу Выполнено (тип «Да/Нет»)."""
+    if goal_number is not None:
+        done_days = {e["date"] for e in entries
+                    if e["habit"] == habit_name and e.get("value") is not None
+                    and e["value"] >= goal_number}
+    else:
+        done_days = {e["date"] for e in entries if e["habit"] == habit_name and e["done"]}
     streak = 0
     day = today
     # сегодняшний день ещё может быть не отмечен — серия не рвётся
@@ -279,95 +297,6 @@ async def get_pending_reminders() -> list[dict]:
         if text and when:
             reminders.append({"id": p["id"], "text": text, "when": when})
     return sorted(reminders, key=lambda r: r["when"])
-
-
-async def mark_reminder_sent(page_id: str) -> None:
-    await notion.pages.update(page_id=page_id,
-                              properties={"Отправлено": {"checkbox": True}})
-
-
-# ---------------------------------------------------------------------------
-# Материалы и досье клиентов: страницы с результатами и памятью проектов
-# ---------------------------------------------------------------------------
-
-def _para(text: str = "") -> dict:
-    rich = [{"type": "text", "text": {"content": text}}] if text else []
-    return {"type": "paragraph", "paragraph": {"rich_text": rich}}
-
-
-def _h2(text: str) -> dict:
-    return {"type": "heading_2",
-            "heading_2": {"rich_text": [{"type": "text", "text": {"content": text}}]}}
-
-
-async def create_material_page(title: str, blocks: list[dict],
-                               parent_page_id: str | None = None) -> str:
-    """Создать страницу-материал (внутри досье проекта или «Материалов»), вернуть URL.
-
-    Notion принимает максимум 100 блоков за запрос — остальные дописываются
-    батчами через blocks.children.append.
-    """
-    parent = parent_page_id or config.NOTION_MATERIALS_PAGE_ID
-    if not parent:
-        raise RuntimeError("Не задан родитель страницы (NOTION_MATERIALS_PAGE_ID)")
-    first, rest = blocks[:100], blocks[100:]
-    page = await notion.pages.create(
-        parent={"page_id": parent},
-        properties={"title": {"title": [{"text": {"content": title[:200]}}]}},
-        children=first,
-    )
-    for i in range(0, len(rest), 100):
-        await notion.blocks.children.append(block_id=page["id"],
-                                            children=rest[i:i + 100])
-    return page.get("url", "")
-
-
-async def create_dossier_page(name: str, description: str = "") -> dict:
-    """Досье клиента внутри страницы «Клиенты»: скелет секций.
-
-    «Факты и решения» — последняя секция: append_dossier_facts дописывает
-    блоки в конец страницы, и факты попадают под нужный заголовок.
-    """
-    if not config.NOTION_CLIENTS_PAGE_ID:
-        raise RuntimeError("NOTION_CLIENTS_PAGE_ID не задан")
-    children = []
-    if description:
-        children.append(_para(description))
-    children += [_h2("Карточка клиента"), _para(),
-                 _h2("Цели"), _para(),
-                 _h2("Факты и решения")]
-    page = await notion.pages.create(
-        parent={"page_id": config.NOTION_CLIENTS_PAGE_ID},
-        properties={"title": {"title": [{"text": {"content": name[:200]}}]}},
-        children=children,
-    )
-    return {"id": page["id"], "url": page.get("url", "")}
-
-
-async def get_child_pages(page_id: str) -> list[dict]:
-    """Дочерние страницы (child_page) заданной страницы: id, title, url.
-
-    Нужна для обратной синхронизации: папки, заведённые вручную под «Клиенты»,
-    приложение подхватывает как проекты. URL собираем из id — короткая форма
-    notion.so/<id> открывает ту же страницу (Notion редиректит на слаг).
-    """
-    pages: list[dict] = []
-    cursor = None
-    while True:
-        kwargs = {"start_cursor": cursor} if cursor else {}
-        resp = await notion.blocks.children.list(block_id=page_id, **kwargs)
-        for b in resp.get("results", []):
-            if b.get("type") == "child_page":
-                pid = b["id"]
-                pages.append({
-                    "id": pid,
-                    "title": b.get("child_page", {}).get("title", ""),
-                    "url": "https://www.notion.so/" + pid.replace("-", ""),
-                })
-        if not resp.get("has_more"):
-            break
-        cursor = resp.get("next_cursor")
-    return pages
 
 
 # ---------------------------------------------------------------------------
@@ -504,56 +433,3 @@ async def confirm_consuntivo_period(start_iso: str, end_iso: str) -> int:
         await notion.pages.update(
             page_id=r["id"], properties={"Stato": {"select": {"name": "Confermato"}}})
     return len(rows)
-
-
-async def append_dossier_facts(page_id: str, facts: list[str]) -> None:
-    stamp = datetime.now(config.ROME_TZ).strftime("%d.%m.%Y")
-    children = [{"type": "bulleted_list_item", "bulleted_list_item": {"rich_text": [
-        {"type": "text", "text": {"content": f"{stamp}: {f}"[:1900]}}]}}
-        for f in facts]
-    await notion.blocks.children.append(block_id=page_id, children=children)
-
-
-_TEXT_BLOCKS = {"paragraph", "heading_1", "heading_2", "heading_3",
-                "bulleted_list_item", "numbered_list_item", "to_do",
-                "quote", "callout", "toggle"}
-
-
-async def get_page_text(page_id: str, max_chars: int = 6000) -> str:
-    """Содержимое страницы плоским текстом — для инжекта досье в промпт.
-
-    Заголовки помечаются ##, таблицы разворачиваются построчно, подстраницы
-    (материалы) — одной строкой с названием.
-    """
-    lines: list[str] = []
-    cursor = None
-    while True:
-        kwargs = {"start_cursor": cursor} if cursor else {}
-        resp = await notion.blocks.children.list(block_id=page_id, **kwargs)
-        for b in resp.get("results", []):
-            t = b.get("type")
-            if t in _TEXT_BLOCKS:
-                txt = _rich_to_text(b[t].get("rich_text", []))
-                if not txt:
-                    continue
-                if t.startswith("heading"):
-                    lines.append(f"\n## {txt}")
-                elif t in ("bulleted_list_item", "numbered_list_item", "to_do"):
-                    lines.append(f"- {txt}")
-                else:
-                    lines.append(txt)
-            elif t == "table":
-                rows = await notion.blocks.children.list(block_id=b["id"])
-                for r in rows.get("results", []):
-                    cells = r.get("table_row", {}).get("cells", [])
-                    lines.append(" | ".join(_rich_to_text(c) for c in cells))
-            elif t == "child_page":
-                lines.append(f"- [сохранённый материал] {b.get('child_page', {}).get('title', '')}")
-            elif t in ("file", "pdf", "image"):
-                caption = _rich_to_text(b[t].get("caption", []))
-                lines.append(f"- [прикреплённый файл, текст не извлекается]"
-                             f"{f' {caption}' if caption else ''}")
-        if not resp.get("has_more"):
-            break
-        cursor = resp.get("next_cursor")
-    return "\n".join(lines).strip()[:max_chars]

@@ -15,11 +15,9 @@ from fastapi.staticfiles import StaticFiles
 from itsdangerous import BadSignature, TimestampSigner
 from pydantic import BaseModel
 
-import agent
 import config
 import digests
 import scheduler as scheduler_module
-import storage
 from services import notion
 
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -120,16 +118,23 @@ async def get_digest(kind: str = "morning"):
 
 
 @app.get("/api/calendar")
-async def get_calendar(days: int = 0):
+async def get_calendar(days: int = 0, scope: str = "today"):
     """События календаря для дашборда, сгруппированные по дням.
 
-    from_now=True — прошедшие встречи сегодняшнего дня скрываются (идущие
-    сейчас остаются). Долгие события (курсы) — отдельным списком long.
+    scope: today (по умолчанию, days задаёт длину окна вперёд) | tomorrow
+    (только завтрашний день, без фильтра from_now — прошедшего времени у
+    завтра нет) | week (используется фронтендом так же, как today, с
+    days=6). from_now=True — прошедшие встречи сегодняшнего дня скрываются
+    (идущие сейчас остаются). Долгие события (курсы) — отдельным списком long.
+    days оставлен для обратной совместимости со старыми клиентами.
     """
     if not config.GOOGLE_TOKEN_JSON:
         return {"configured": False, "days": [], "long": []}
     from services import gcal
-    data = await gcal.get_events_full(days=min(days, 14), from_now=True)
+    if scope == "tomorrow":
+        data = await gcal.get_events_full(days=0, from_now=False, start_offset=1)
+    else:
+        data = await gcal.get_events_full(days=min(days, 14), from_now=True)
     by_day: dict[str, list] = {}
     for ev in data["events"]:
         by_day.setdefault(ev["day"], []).append(
@@ -187,6 +192,28 @@ class RescheduleBody(BaseModel):
 async def reschedule_task(task_id: str, body: RescheduleBody):
     try:
         await notion.reschedule_task(task_id, body.new_date)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=_notion_hint(e))
+    return {"ok": True}
+
+
+class NewTaskBody(BaseModel):
+    title: str
+    zone: str = "💼 Бизнес"
+    priority: str = "✅ Обычное"
+    deadline: str | None = None  # YYYY-MM-DD
+    project: str | None = None
+    comment: str | None = None
+
+
+@app.post("/api/tasks")
+async def create_task(body: NewTaskBody):
+    if not body.title.strip():
+        raise HTTPException(status_code=400, detail="Название задачи пустое")
+    try:
+        await notion.create_task(
+            body.title.strip(), deadline=body.deadline, priority=body.priority,
+            zone=body.zone, project=body.project, comment=body.comment)
     except Exception as e:
         raise HTTPException(status_code=502, detail=_notion_hint(e))
     return {"ok": True}
@@ -257,14 +284,20 @@ async def get_habits():
         raise HTTPException(status_code=502, detail=_notion_hint(e))
     today = datetime.now(config.ROME_TZ).date()
     today_iso = today.isoformat()
-    done_today = {e["habit"] for e in entries if e["date"] == today_iso and e["done"]}
+    today_entries = {e["habit"]: e for e in entries if e["date"] == today_iso}
     return {"date": today_iso, "configured": bool(config.NOTION_HABITS_DB_ID),
             "habits": [
                 {
                     "name": h["name"],
+                    "type": h.get("type", "Да/Нет"),
                     "goal": h.get("goal", ""),
-                    "done_today": h["name"] in done_today,
-                    "streak": notion.habit_streak(entries, h["name"], today),
+                    "goal_number": h.get("goal_number"),
+                    "unit": h.get("unit", ""),
+                    "done_today": bool(today_entries.get(h["name"], {}).get("done")),
+                    "value_today": today_entries.get(h["name"], {}).get("value"),
+                    "streak": notion.habit_streak(
+                        entries, h["name"], today,
+                        goal_number=h.get("goal_number") if h.get("type") == "Число" else None),
                 } for h in habits
             ]}
 
@@ -272,6 +305,8 @@ async def get_habits():
 class HabitLogBody(BaseModel):
     habit_name: str
     done: bool = True
+    value: float | None = None
+    note: str | None = None
     date: str | None = None
 
 
@@ -279,7 +314,8 @@ class HabitLogBody(BaseModel):
 async def post_habit_log(body: HabitLogBody):
     day = body.date or datetime.now(config.ROME_TZ).date().isoformat()
     try:
-        await notion.log_habit(body.habit_name, day, body.done)
+        await notion.log_habit(body.habit_name, day, body.done,
+                               value=body.value, note=body.note)
     except Exception as e:
         raise HTTPException(status_code=502, detail=_notion_hint(e))
     return {"ok": True}
@@ -443,178 +479,6 @@ async def get_plan():
         "queue": [t["title"] for t in queue],
         "total_tasks": len(week_tasks),
     }
-
-
-@app.post("/api/analytics/recommendation")
-async def analytics_recommendation(offset: int = 0):
-    """Рекомендации Паолы по итогам недели (по запросу, чтобы не жечь токены)."""
-    data = await get_analytics(offset=offset)
-    try:
-        active = await notion.get_active_tasks()
-        overdue = await notion.get_overdue_tasks()
-    except Exception:
-        active, overdue = [], []
-    zones_str = "\n".join(f"- {z['zone']}: {z['count']} задач — "
-                          + "; ".join(z["titles"][:5]) for z in data["zones"]) or "ничего"
-    habits_str = "\n".join(f"- {h['name']}: {h['days_done']}/7 дней"
-                           for h in data["habits_week"]) or "нет данных"
-    prompt = (
-        f"Неделя {data['week_start']}—{data['week_end']}.\n"
-        f"Закрыто задач по зонам:\n{zones_str}\n\n"
-        f"Привычки за неделю:\n{habits_str}\n\n"
-        f"Сейчас активных задач: {len(active)}, из них просрочено: {len(overdue)}.\n\n"
-        "Дай короткий разбор эффективности недели: 1) где был фокус и что это значит; "
-        "2) какая сфера просела; 3) две конкретные рекомендации на следующую неделю. "
-        "До 120 слов, plain text с эмодзи зон, без markdown."
-    )
-    try:
-        resp = await agent.client.messages.create(
-            model=config.MODEL_SMART, max_tokens=800,
-            system=agent.BASE_IDENTITY, messages=[{"role": "user", "content": prompt}])
-        text = "\n".join(b.text for b in resp.content if b.type == "text").strip()
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Ошибка генерации: {e}")
-    return {"recommendation": text}
-
-
-# ---------------------------------------------------------------------------
-# Аналитика: проекты и чаты
-# ---------------------------------------------------------------------------
-
-@app.get("/api/overview")
-async def get_overview():
-    data = await storage.overview()
-    data["modes"] = storage.CHAT_MODES
-    return data
-
-
-class ProjectBody(BaseModel):
-    name: str
-    description: str = ""
-
-
-async def _ensure_dossier(project_id: str, name: str, description: str) -> str | None:
-    """Создать досье клиента в Notion, если настроено; вернуть page_id.
-
-    Ошибка Notion не должна ломать работу с проектом — логируем и живём без
-    досье (создастся при следующей попытке).
-    """
-    if not config.NOTION_CLIENTS_PAGE_ID:
-        return None
-    try:
-        d = await notion.create_dossier_page(name, description)
-    except Exception as e:
-        logger.error("Не удалось создать досье «%s»: %s", name, _notion_hint(e))
-        return None
-    await storage.set_project_notion(project_id, d["id"], d["url"])
-    return d["id"]
-
-
-@app.post("/api/projects")
-async def post_project(body: ProjectBody):
-    if not body.name.strip():
-        raise HTTPException(status_code=400, detail="Название проекта пустое")
-    project = await storage.create_project(body.name.strip(), body.description.strip())
-    await _ensure_dossier(project["id"], project["name"], project["description"])
-    return project
-
-
-@app.post("/api/projects/sync")
-async def sync_projects():
-    """Обратная синхронизация: подтянуть папки из «Клиенты Паола App» в Notion.
-
-    Папки, созданные там вручную, становятся проектами; переименования
-    подхватываются. Ошибка Notion не критична — вернём configured=False,
-    приложение продолжит работать на локальных проектах.
-    """
-    if not config.NOTION_CLIENTS_PAGE_ID:
-        return {"configured": False, "adopted": 0, "renamed": 0}
-    try:
-        pages = await notion.get_child_pages(config.NOTION_CLIENTS_PAGE_ID)
-    except Exception as e:
-        logger.error("Не удалось прочитать «Клиенты»: %s", _notion_hint(e))
-        raise HTTPException(status_code=502, detail=_notion_hint(e))
-    result = await storage.sync_projects(pages)
-    return {"configured": True,
-            "adopted": len(result["adopted"]), "renamed": result["renamed"]}
-
-
-class ChatCreateBody(BaseModel):
-    mode: str
-    project_id: str | None = None
-    title: str = ""
-
-
-@app.post("/api/chats")
-async def post_chat(body: ChatCreateBody):
-    if body.mode not in storage.CHAT_MODES:
-        raise HTTPException(status_code=400, detail=f"Неизвестный режим: {body.mode}")
-    # внутри проекта режим не выбирается — там всегда единый агент проекта
-    mode = "assistant" if body.project_id else body.mode
-    default = "Рабочий чат" if body.project_id else storage.CHAT_MODES[mode].split(" ", 1)[1]
-    title = body.title.strip() or default
-    return await storage.create_chat(mode, body.project_id, title)
-
-
-@app.get("/api/chats/{chat_id}")
-async def get_chat(chat_id: str):
-    chat = await storage.get_chat(chat_id)
-    if not chat:
-        raise HTTPException(status_code=404, detail="Чат не найден")
-    chat["messages"] = await storage.get_messages(chat_id)
-    return chat
-
-
-@app.delete("/api/chats/{chat_id}")
-async def delete_chat(chat_id: str):
-    await storage.delete_chat(chat_id)
-    return {"ok": True}
-
-
-class MessageBody(BaseModel):
-    message: str
-
-
-@app.post("/api/chats/{chat_id}/messages")
-async def post_message(chat_id: str, body: MessageBody):
-    chat = await storage.get_chat(chat_id)
-    if not chat:
-        raise HTTPException(status_code=404, detail="Чат не найден")
-
-    history = await storage.get_messages(chat_id)
-    api_messages = ([{"role": m["role"], "content": m["content"]} for m in history]
-                    + [{"role": "user", "content": body.message}])
-
-    # досье клиента: у старых проектов его может не быть — досоздаём на лету
-    project_page_id = chat.get("project_page_id")
-    if chat.get("project_id") and not project_page_id:
-        project_page_id = await _ensure_dossier(
-            chat["project_id"], chat.get("project_name") or "Клиент",
-            chat.get("project_description") or "")
-
-    try:
-        reply = await agent.run_chat(
-            chat["mode"], api_messages,
-            project_name=chat.get("project_name"),
-            project_desc=chat.get("project_description"),
-            project_page_id=project_page_id,
-        )
-    except Exception as e:
-        logger.exception("Agent error")
-        raise HTTPException(status_code=502, detail=f"Ошибка агента: {e}")
-
-    await storage.add_message(chat_id, "user", body.message)
-    await storage.add_message(chat_id, "assistant", reply)
-
-    # первому сообщению — имя чата (если оно стандартное)
-    default_titles = ({v.split(" ", 1)[1] for v in storage.CHAT_MODES.values()}
-                      | {"Рабочий чат"})
-    if not history and chat["title"] in default_titles and chat["mode"] != "translator":
-        new_title = body.message.strip().replace("\n", " ")[:42]
-        if new_title:
-            await storage.rename_chat(chat_id, new_title)
-
-    return {"reply": reply}
 
 
 # ---------------------------------------------------------------------------
