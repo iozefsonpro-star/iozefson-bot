@@ -168,9 +168,9 @@ h2{font-family:var(--display);font-size:22px;font-weight:500;margin:0}
       background:none;border:none;padding:2px 5px;border-radius:7px;cursor:pointer}
 .task .t-date:hover{background:var(--tag-bg);color:var(--accent)}
 .task .t-date.t-date-empty{color:var(--accent)}
-.task .t-delete{flex:none;background:none;border:none;color:var(--muted-2);
-      font-size:14px;line-height:1;padding:4px 2px;cursor:pointer}
-.task .t-delete:hover{color:var(--overdue)}
+.task .t-delete{flex:none;background:none;border:none;font-size:16px;line-height:1;
+      padding:6px 2px;cursor:pointer;opacity:.55}
+.task .t-delete:hover,.task .t-delete:active{opacity:1}
 
 /* привычки */
 .habits{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:6px}

@@ -114,20 +114,25 @@
   </nav>
 </div>
 
-<!-- Диалог: перенос дедлайна задачи -->
+<!-- Диалог: дедлайн задачи — сначала меню действий, календарь только по «Выбрать дату» -->
 <dialog id="dlg-resched">
-  <form method="dialog" class="dlg-form" id="dlg-resched-form">
-    <h3>Перенести дедлайн</h3>
+  <div class="dlg-form">
+    <h3>Дедлайн</h3>
     <p id="dlg-resched-title" class="dlg-resched-task"></p>
-    <label>Новая дата
-      <input type="date" id="dlg-resched-date">
-    </label>
-    <div class="dlg-actions">
-      <button value="cancel" class="pill pill-ghost" formnovalidate>Отмена</button>
-      <button value="clear" class="pill pill-ghost" formnovalidate>Без даты</button>
-      <button value="ok" class="pill pill-solid">Перенести</button>
+    <div class="task-date-quick">
+      <button type="button" class="pill pill-ghost pill-sm" data-resched="today">Сегодня</button>
+      <button type="button" class="pill pill-ghost pill-sm" data-resched="tomorrow">Завтра</button>
+      <button type="button" class="pill pill-ghost pill-sm" data-resched="clear">Без даты</button>
+      <button type="button" class="pill pill-ghost pill-sm" data-resched="pick">Дата…</button>
     </div>
-  </form>
+    <div id="dlg-resched-picker" class="hidden">
+      <input type="date" id="dlg-resched-date">
+    </div>
+    <div class="dlg-actions">
+      <button type="button" id="dlg-resched-cancel" class="pill pill-ghost">Отмена</button>
+      <button type="button" id="dlg-resched-save" class="pill pill-solid hidden">Перенести</button>
+    </div>
+  </div>
 </dialog>
 
 <!-- Диалог: новая задача -->
