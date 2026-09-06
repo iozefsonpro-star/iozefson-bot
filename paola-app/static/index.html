@@ -56,8 +56,9 @@
         <div class="cal-head-actions">
           <button id="cal-refresh" class="icon-btn" type="button" aria-label="Обновить календарь">↻</button>
           <div class="seg">
-            <button class="seg-btn active" data-cal-days="0" type="button">День</button>
-            <button class="seg-btn" data-cal-days="7" type="button">Неделя</button>
+            <button class="seg-btn active" data-cal-scope="today" type="button">День</button>
+            <button class="seg-btn" data-cal-scope="tomorrow" type="button">Завтра</button>
+            <button class="seg-btn" data-cal-scope="week" type="button">Неделя</button>
           </div>
         </div>
       </div>
@@ -65,7 +66,13 @@
     </div>
 
     <div class="section">
-      <div class="section-head"><h2>Задачи</h2><span id="tasks-meta" class="meta-label"></span></div>
+      <div class="section-head">
+        <h2>Задачи</h2>
+        <div class="task-head-actions">
+          <button id="new-task-btn" class="pill pill-ghost" type="button">＋ задача</button>
+          <span id="tasks-meta" class="meta-label"></span>
+        </div>
+      </div>
       <div id="tasks-body">Загружаю…</div>
     </div>
 
@@ -87,41 +94,9 @@
     </div>
   </section>
 
-  <!-- ===== ЧАТ ===== -->
-  <section id="view-chat" class="view hidden">
-    <div class="chat-head">
-      <span class="orb orb-md" aria-hidden="true">П</span>
-      <div class="chat-head-txt">
-        <div class="chat-head-name">Паола</div>
-        <div id="chat-status" class="chat-head-status">на связи</div>
-      </div>
-      <button id="chat-delete" class="ghost-btn" type="button" title="Удалить чат">🗑</button>
-    </div>
-    <div id="chat-chips" class="chips"></div>
-    <div id="chat-log" class="chat-log"></div>
-    <form id="chat-form" class="chat-input">
-      <button type="button" id="mic-btn" class="mic-btn hidden" aria-label="Голосовой ввод" title="Наговорить">🎙</button>
-      <textarea id="chat-input" rows="1" placeholder="Напишите Паоле…" required></textarea>
-      <button type="submit" id="chat-send" aria-label="Отправить">↑</button>
-    </form>
-  </section>
-
-  <!-- ===== ПРОЕКТЫ ===== -->
-  <section id="view-projects" class="view hidden">
-    <div class="section-head view-title">
-      <h2>Проекты</h2>
-      <div class="proj-head-actions">
-        <button id="sync-projects-btn" class="icon-btn" type="button" aria-label="Подтянуть из Notion" title="Подтянуть папки из Notion">↻</button>
-        <button id="new-project-btn" class="pill pill-ghost" type="button">＋ проект</button>
-      </div>
-    </div>
-    <div id="projects-list" class="projects"></div>
-    <p id="projects-empty" class="empty hidden">Проектов пока нет. Создай папку под клиента здесь или в Notion (внутри «Клиенты Паола App») — синхронизируется автоматически, чаты внутри получат его контекст.</p>
-  </section>
-
-  <!-- ===== АНАЛИТИКА ===== -->
+  <!-- ===== НЕДЕЛЯ (итоги / план) ===== -->
   <section id="view-analytics" class="view hidden">
-    <div class="section-head view-title"><h2>Аналитика</h2></div>
+    <div class="section-head view-title"><h2>Неделя</h2></div>
     <div class="seg seg-wide">
       <button class="seg-btn active" data-analytics-mode="review" type="button">Итоги недели</button>
       <button class="seg-btn" data-analytics-mode="plan" type="button">План недели</button>
@@ -134,11 +109,6 @@
         <button id="week-next" class="ghost-btn" type="button">▶</button>
       </div>
       <div id="analytics-body">Загружаю…</div>
-      <button id="recommend-btn" class="pill pill-solid" type="button">Рекомендации Паолы</button>
-      <div id="recommend-box" class="nudge hidden">
-        <div class="nudge-head"><span class="orb orb-sm">П</span><span class="nudge-who">Паола · итоги недели</span></div>
-        <p id="recommend-text" class="nudge-text"></p>
-      </div>
     </div>
 
     <div id="analytics-plan" class="hidden">
@@ -150,9 +120,7 @@
   <!-- ===== НИЖНЯЯ НАВИГАЦИЯ ===== -->
   <nav class="tabbar" aria-label="Основная навигация">
     <button class="tab active" data-view="home" type="button"><span class="tab-ico">⌂</span>Дом</button>
-    <button class="tab" data-view="chat" type="button"><span class="tab-ico">✎</span>Чат</button>
-    <button class="tab" data-view="projects" type="button"><span class="tab-ico">▤</span>Проекты</button>
-    <button class="tab" data-view="analytics" type="button"><span class="tab-ico">◔</span>Аналитика</button>
+    <button class="tab" data-view="analytics" type="button"><span class="tab-ico">◔</span>Неделя</button>
   </nav>
 </div>
 
@@ -171,38 +139,48 @@
   </form>
 </dialog>
 
-<!-- Диалог: новый чат -->
-<dialog id="dlg-chat">
-  <form method="dialog" class="dlg-form" id="dlg-chat-form">
-    <h3>Новый чат</h3>
-    <label id="dlg-chat-mode-label">Тип
-      <select id="dlg-chat-mode"></select>
+<!-- Диалог: новая задача -->
+<dialog id="dlg-task">
+  <form method="dialog" class="dlg-form" id="dlg-task-form">
+    <h3>Новая задача</h3>
+    <label>Задача
+      <div class="task-input-row">
+        <input type="text" id="dlg-task-title" placeholder="Что нужно сделать" required>
+        <button type="button" id="task-mic-btn" class="mic-btn hidden" aria-label="Голосовой ввод" title="Наговорить">🎙</button>
+      </div>
     </label>
-    <label>Проект (необязательно)
-      <select id="dlg-chat-project"><option value="">— без проекта —</option></select>
+    <label>Зона
+      <select id="dlg-task-zone">
+        <option value="💼 Бизнес" selected>💼 Бизнес</option>
+        <option value="👥 Networking">👥 Networking</option>
+        <option value="💰 Финансы">💰 Финансы</option>
+        <option value="🏥 Salute">🏥 Salute</option>
+        <option value="🧠 Mental">🧠 Mental</option>
+        <option value="🏠 Family">🏠 Family</option>
+        <option value="💅 Beauty">💅 Beauty</option>
+        <option value="✈️ Viaggi">✈️ Viaggi</option>
+        <option value="🪞 Personal">🪞 Personal</option>
+      </select>
     </label>
-    <p id="dlg-chat-project-hint" class="dlg-hint hidden">В проекте Паола сама
-      выбирает инструменты — режим не нужен, а материалы и память идут в досье клиента.</p>
-    <label>Название (необязательно)
-      <input type="text" id="dlg-chat-title" placeholder="Например: Ресерч рынка упаковки">
+    <label>Приоритет
+      <div class="seg seg-wide" id="dlg-task-priority">
+        <button type="button" class="seg-btn" data-priority="❗ Важное">Важное</button>
+        <button type="button" class="seg-btn active" data-priority="✅ Обычное">Обычное</button>
+        <button type="button" class="seg-btn" data-priority="🔜 Когда-нибудь">Когда-нибудь</button>
+      </div>
     </label>
-    <div class="dlg-actions">
-      <button value="cancel" class="pill pill-ghost" formnovalidate>Отмена</button>
-      <button value="ok" class="pill pill-solid">Создать</button>
-    </div>
-  </form>
-</dialog>
-
-<!-- Диалог: новый проект -->
-<dialog id="dlg-project">
-  <form method="dialog" class="dlg-form" id="dlg-project-form">
-    <h3>Новый проект</h3>
-    <label>Название
-      <input type="text" id="dlg-project-name" placeholder="Например: Клиент Rossi Srl" required>
+    <label>Дедлайн
+      <input type="date" id="dlg-task-date">
+      <div class="task-date-quick">
+        <button type="button" class="pill pill-ghost pill-sm" data-quick-date="today">Сегодня</button>
+        <button type="button" class="pill pill-ghost pill-sm" data-quick-date="tomorrow">Завтра</button>
+        <button type="button" class="pill pill-ghost pill-sm active" data-quick-date="none">Без даты</button>
+      </div>
     </label>
-    <label>Контекст для Паолы (необязательно)
-      <textarea id="dlg-project-desc" rows="3" placeholder="Чем занимается клиент, что анализируем, цель…"></textarea>
-    </label>
+    <details class="dlg-comment">
+      <summary>Комментарий</summary>
+      <textarea id="dlg-task-comment" rows="2" placeholder="Необязательно"></textarea>
+    </details>
     <div class="dlg-actions">
       <button value="cancel" class="pill pill-ghost" formnovalidate>Отмена</button>
       <button value="ok" class="pill pill-solid">Создать</button>

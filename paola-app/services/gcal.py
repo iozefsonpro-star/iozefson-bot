@@ -65,12 +65,12 @@ def _get_service_sync():
         return None
 
 
-def _fetch_events_sync(days: int, from_now: bool) -> dict:
+def _fetch_events_sync(days: int, from_now: bool, start_offset: int = 0) -> dict:
     with _gcal_lock:
-        return _fetch_events_locked(days, from_now)
+        return _fetch_events_locked(days, from_now, start_offset)
 
 
-def _fetch_events_locked(days: int, from_now: bool) -> dict:
+def _fetch_events_locked(days: int, from_now: bool, start_offset: int = 0) -> dict:
     empty = {"events": [], "long": [], "hidden_past_today": 0}
     service = _get_service_sync()
     if not service:
@@ -82,8 +82,11 @@ def _fetch_events_locked(days: int, from_now: bool) -> dict:
     # заканчивается сессия, могло бы выпасть из окна и пропасть из «В процессе»
     # только из-за того, что "сейчас" позже конца сегодняшней сессии.
     # from_now скрывает прошедшие обычные встречи ниже, в Python, точечно.
-    time_min = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    time_max = (now + timedelta(days=days)).replace(hour=23, minute=59, second=59)
+    # start_offset сдвигает начало окна на N дней вперёд (0 — сегодня, 1 — завтра);
+    # days считается уже от этого сдвинутого начала, а не от «сегодня».
+    time_min = (now + timedelta(days=start_offset)).replace(
+        hour=0, minute=0, second=0, microsecond=0)
+    time_max = (time_min + timedelta(days=days)).replace(hour=23, minute=59, second=59)
 
     events: list[dict] = []
     long_events: list[dict] = []
@@ -165,13 +168,15 @@ def _fetch_events_locked(days: int, from_now: bool) -> dict:
     return {"events": events, "long": long_events, "hidden_past_today": hidden_past_today}
 
 
-async def get_events_full(days: int = 0, from_now: bool = False) -> dict:
+async def get_events_full(days: int = 0, from_now: bool = False,
+                          start_offset: int = 0) -> dict:
     """События календарей: {"events": встречи, "long": долгие периоды/курсы}.
 
-    days=0 — только сегодня; from_now=True — скрыть уже закончившиеся встречи
+    days=0 — только один день; from_now=True — скрыть уже закончившиеся встречи
     (Google timeMin фильтрует по времени окончания, идущие сейчас остаются).
+    start_offset — сдвиг начала окна в днях от сегодня (1 — начиная с завтра).
     """
-    return await asyncio.to_thread(_fetch_events_sync, days, from_now)
+    return await asyncio.to_thread(_fetch_events_sync, days, from_now, start_offset)
 
 
 async def get_events(days: int = 0, from_now: bool = False) -> list[dict]:
