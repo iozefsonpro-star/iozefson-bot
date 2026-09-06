@@ -168,6 +168,9 @@ h2{font-family:var(--display);font-size:22px;font-weight:500;margin:0}
       background:none;border:none;padding:2px 5px;border-radius:7px;cursor:pointer}
 .task .t-date:hover{background:var(--tag-bg);color:var(--accent)}
 .task .t-date.t-date-empty{color:var(--accent)}
+.task .t-delete{flex:none;background:none;border:none;color:var(--muted-2);
+      font-size:14px;line-height:1;padding:4px 2px;cursor:pointer}
+.task .t-delete:hover{color:var(--overdue)}
 
 /* привычки */
 .habits{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:6px}
@@ -183,16 +186,6 @@ h2{font-family:var(--display);font-size:22px;font-weight:500;margin:0}
       border-radius:10px;background:#fff;text-align:right}
 .habit-number .h-goal-label{font-size:12px;color:var(--muted);white-space:nowrap}
 .habit-number.goal-met .h-goal-label{color:var(--done);font-weight:600}
-
-/* напоминания */
-.reminders{list-style:none;padding:0;margin:0 0 4px;display:flex;flex-direction:column;gap:6px}
-.reminder{display:flex;gap:12px;font-size:14px;padding:9px 13px;background:var(--surface);
-          border:1px solid var(--line);border-radius:var(--r-task)}
-.reminder .r-when{font-family:var(--mono);font-size:12px;color:var(--accent);
-                  white-space:nowrap;padding-top:1px}
-.reminder-form{display:grid;grid-template-columns:1fr;gap:8px}
-.reminder-form input{padding:10px 14px;border:1px solid var(--line-strong);
-                     border-radius:999px;background:#fff}
 
 /* голосовой ввод */
 .mic-btn{width:48px;height:48px;flex:none;border:1px solid var(--line-2);
@@ -277,7 +270,3 @@ dialog::backdrop{background:rgba(31,39,49,.45)}
 .dlg-comment summary{cursor:pointer;color:var(--accent);font-weight:600}
 .dlg-comment textarea{width:100%;margin-top:8px;padding:10px 14px;
     border:1px solid var(--line-strong);border-radius:14px;background:#fff}
-
-@media (min-width:700px){
-  .reminder-form{grid-template-columns:1fr auto auto}
-}

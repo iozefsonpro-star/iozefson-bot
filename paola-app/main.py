@@ -184,14 +184,23 @@ async def complete_task(task_id: str):
     return {"ok": True}
 
 
+@app.delete("/api/tasks/{task_id}")
+async def delete_task(task_id: str):
+    try:
+        await notion.delete_task(task_id)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=_notion_hint(e))
+    return {"ok": True}
+
+
 class RescheduleBody(BaseModel):
-    new_date: str  # YYYY-MM-DD
+    new_date: str | None = None  # YYYY-MM-DD; None/пусто — очистить дедлайн
 
 
 @app.post("/api/tasks/{task_id}/reschedule")
 async def reschedule_task(task_id: str, body: RescheduleBody):
     try:
-        await notion.reschedule_task(task_id, body.new_date)
+        await notion.reschedule_task(task_id, body.new_date or None)
     except Exception as e:
         raise HTTPException(status_code=502, detail=_notion_hint(e))
     return {"ok": True}
@@ -316,33 +325,6 @@ async def post_habit_log(body: HabitLogBody):
     try:
         await notion.log_habit(body.habit_name, day, body.done,
                                value=body.value, note=body.note)
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=_notion_hint(e))
-    return {"ok": True}
-
-
-@app.get("/api/reminders")
-async def get_reminders():
-    try:
-        return {"configured": bool(config.NOTION_REMINDERS_DB_ID),
-                "reminders": await notion.get_pending_reminders()}
-    except Exception as e:
-        logger.exception("Reminders error")
-        raise HTTPException(status_code=502, detail=_notion_hint(e))
-
-
-class ReminderBody(BaseModel):
-    text: str
-    when: str  # ISO YYYY-MM-DDTHH:MM
-
-
-@app.post("/api/reminders")
-async def post_reminder(body: ReminderBody):
-    if not config.NOTION_REMINDERS_DB_ID:
-        raise HTTPException(status_code=400,
-                            detail="База «Напоминания» не настроена (NOTION_REMINDERS_DB_ID).")
-    try:
-        await notion.create_reminder(body.text, body.when)
     except Exception as e:
         raise HTTPException(status_code=502, detail=_notion_hint(e))
     return {"ok": True}

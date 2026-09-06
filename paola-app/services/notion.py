@@ -113,9 +113,11 @@ async def delete_task(page_id: str) -> None:
     await notion.pages.update(page_id=page_id, archived=True)
 
 
-async def reschedule_task(page_id: str, new_date: str) -> None:
-    await notion.pages.update(page_id=page_id,
-                              properties={"Дедлайн": {"date": {"start": new_date}}})
+async def reschedule_task(page_id: str, new_date: str | None) -> None:
+    """new_date=None — очистить дедлайн (задача становится без даты)."""
+    await notion.pages.update(
+        page_id=page_id,
+        properties={"Дедлайн": {"date": {"start": new_date} if new_date else None}})
 
 
 async def get_deadline_between(start_iso: str, end_iso: str,
@@ -264,39 +266,6 @@ def habit_streak(entries: list[dict], habit_name: str, today: date,
         streak += 1
         day -= timedelta(days=1)
     return streak
-
-
-# ---------------------------------------------------------------------------
-# Напоминания: база «Напоминания»
-# ---------------------------------------------------------------------------
-
-async def create_reminder(text: str, when_iso: str) -> dict:
-    return await notion.pages.create(
-        parent={"database_id": config.NOTION_REMINDERS_DB_ID},
-        properties={
-            "Напоминание": {"title": [{"text": {"content": text}}]},
-            "Когда":       {"date": {"start": when_iso, "time_zone": "Europe/Rome"}},
-            "Отправлено":  {"checkbox": False},
-        },
-    )
-
-
-async def get_pending_reminders() -> list[dict]:
-    """Неотправленные напоминания (для планировщика и дашборда)."""
-    if not config.NOTION_REMINDERS_DB_ID:
-        return []
-    pages = await _query_all(
-        config.NOTION_REMINDERS_DB_ID,
-        filter={"property": "Отправлено", "checkbox": {"equals": False}},
-    )
-    reminders = []
-    for p in pages:
-        props = p.get("properties", {})
-        when = (props.get("Когда", {}).get("date") or {}).get("start", "")
-        text = _rich_to_text(props.get("Напоминание", {}).get("title", []))
-        if text and when:
-            reminders.append({"id": p["id"], "text": text, "when": when})
-    return sorted(reminders, key=lambda r: r["when"])
 
 
 # ---------------------------------------------------------------------------

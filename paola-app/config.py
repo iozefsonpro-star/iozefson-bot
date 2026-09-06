@@ -17,7 +17,6 @@ SECRET_KEY   = os.environ.get("SECRET_KEY")     # для подписи cookie �
 NOTION_TODOLIST_DB_ID  = os.environ.get("NOTION_TODOLIST_DB_ID")   # Задачи (та же, что у Паолы)
 NOTION_HABITS_DB_ID    = os.environ.get("NOTION_HABITS_DB_ID")     # Привычки
 NOTION_HABIT_LOG_DB_ID = os.environ.get("NOTION_HABIT_LOG_DB_ID")  # Журнал привычек
-NOTION_REMINDERS_DB_ID = os.environ.get("NOTION_REMINDERS_DB_ID")  # Напоминания
 
 # --- Консунтиво Generali (учёт часов и биллинг по клиенту Generali) ---
 # Базы созданы внутри страницы клиента Generali; интеграция наследует доступ

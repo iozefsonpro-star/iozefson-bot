@@ -82,16 +82,6 @@
       <p id="habits-empty" class="empty hidden"></p>
     </div>
 
-    <div class="section">
-      <div class="section-head"><h2>Напоминания</h2></div>
-      <ul id="reminders-list" class="reminders"></ul>
-      <p id="reminders-empty" class="empty hidden"></p>
-      <form id="reminder-form" class="reminder-form">
-        <input type="text" id="reminder-text" placeholder="О чём напомнить" required>
-        <input type="datetime-local" id="reminder-when" required>
-        <button type="submit" class="pill pill-solid">Создать</button>
-      </form>
-    </div>
   </section>
 
   <!-- ===== НЕДЕЛЯ (итоги / план) ===== -->
@@ -130,10 +120,11 @@
     <h3>Перенести дедлайн</h3>
     <p id="dlg-resched-title" class="dlg-resched-task"></p>
     <label>Новая дата
-      <input type="date" id="dlg-resched-date" required>
+      <input type="date" id="dlg-resched-date">
     </label>
     <div class="dlg-actions">
       <button value="cancel" class="pill pill-ghost" formnovalidate>Отмена</button>
+      <button value="clear" class="pill pill-ghost" formnovalidate>Без даты</button>
       <button value="ok" class="pill pill-solid">Перенести</button>
     </div>
   </form>
