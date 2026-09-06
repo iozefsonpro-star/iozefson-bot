@@ -269,39 +269,6 @@ def habit_streak(entries: list[dict], habit_name: str, today: date,
 
 
 # ---------------------------------------------------------------------------
-# Напоминания: база «Напоминания»
-# ---------------------------------------------------------------------------
-
-async def create_reminder(text: str, when_iso: str) -> dict:
-    return await notion.pages.create(
-        parent={"database_id": config.NOTION_REMINDERS_DB_ID},
-        properties={
-            "Напоминание": {"title": [{"text": {"content": text}}]},
-            "Когда":       {"date": {"start": when_iso, "time_zone": "Europe/Rome"}},
-            "Отправлено":  {"checkbox": False},
-        },
-    )
-
-
-async def get_pending_reminders() -> list[dict]:
-    """Неотправленные напоминания (для планировщика и дашборда)."""
-    if not config.NOTION_REMINDERS_DB_ID:
-        return []
-    pages = await _query_all(
-        config.NOTION_REMINDERS_DB_ID,
-        filter={"property": "Отправлено", "checkbox": {"equals": False}},
-    )
-    reminders = []
-    for p in pages:
-        props = p.get("properties", {})
-        when = (props.get("Когда", {}).get("date") or {}).get("start", "")
-        text = _rich_to_text(props.get("Напоминание", {}).get("title", []))
-        if text and when:
-            reminders.append({"id": p["id"], "text": text, "when": when})
-    return sorted(reminders, key=lambda r: r["when"])
-
-
-# ---------------------------------------------------------------------------
 # Консунтиво Generali: учёт часов и биллинг (базы под страницей клиента Generali)
 # Consuntivo Generali — строки-активности, Tariffe — ставки, Reparti — справочник.
 # ---------------------------------------------------------------------------

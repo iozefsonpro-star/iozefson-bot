@@ -330,33 +330,6 @@ async def post_habit_log(body: HabitLogBody):
     return {"ok": True}
 
 
-@app.get("/api/reminders")
-async def get_reminders():
-    try:
-        return {"configured": bool(config.NOTION_REMINDERS_DB_ID),
-                "reminders": await notion.get_pending_reminders()}
-    except Exception as e:
-        logger.exception("Reminders error")
-        raise HTTPException(status_code=502, detail=_notion_hint(e))
-
-
-class ReminderBody(BaseModel):
-    text: str
-    when: str  # ISO YYYY-MM-DDTHH:MM
-
-
-@app.post("/api/reminders")
-async def post_reminder(body: ReminderBody):
-    if not config.NOTION_REMINDERS_DB_ID:
-        raise HTTPException(status_code=400,
-                            detail="База «Напоминания» не настроена (NOTION_REMINDERS_DB_ID).")
-    try:
-        await notion.create_reminder(body.text, body.when)
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=_notion_hint(e))
-    return {"ok": True}
-
-
 # ---------------------------------------------------------------------------
 # Аналитика недели: фокус по зонам, понедельная навигация
 # ---------------------------------------------------------------------------
