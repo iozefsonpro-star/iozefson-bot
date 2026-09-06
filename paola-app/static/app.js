@@ -234,7 +234,8 @@ function taskLi(t) {
   const del = document.createElement("button");
   del.type = "button";
   del.className = "t-delete";
-  del.textContent = "✕";
+  del.textContent = "🗑";
+  del.title = "Удалить задачу";
   del.setAttribute("aria-label", "Удалить задачу: " + t.title);
   del.addEventListener("click", () => deleteTask(t, li));
   li.append(del);
@@ -268,20 +269,21 @@ async function completeTask(taskId, li, check) {
 
 let RESCHED_TASK = null;
 
+// Диалог дедлайна: сначала быстрые варианты (Сегодня / Завтра / Без даты),
+// календарь — только по «Дата…». Иначе нативный date-picker на iOS всплывает
+// раньше самого меню и перекрывает его.
 function openRescheduleDialog(t) {
   RESCHED_TASK = t;
   $("#dlg-resched-title").textContent = t.title;
-  $("#dlg-resched-date").value = (t.deadline || "").slice(0, 10)
-    || new Date().toISOString().slice(0, 10);
+  $("#dlg-resched-date").value = (t.deadline || "").slice(0, 10) || isoDateLocal(new Date());
+  $("#dlg-resched-picker").classList.add("hidden");
+  $("#dlg-resched-save").classList.add("hidden");
   $("#dlg-resched").showModal();
 }
 
-$("#dlg-resched-form").addEventListener("submit", async (e) => {
-  if (e.submitter && e.submitter.value === "cancel") return;
+async function applyDeadline(newDate) {
   if (!RESCHED_TASK) return;
-  const clearing = e.submitter && e.submitter.value === "clear";
-  const newDate = clearing ? null : $("#dlg-resched-date").value;
-  if (!clearing && !newDate) return;
+  $("#dlg-resched").close();
   try {
     await api(`/api/tasks/${RESCHED_TASK.id}/reschedule`, {
       method: "POST", body: JSON.stringify({ new_date: newDate }),
@@ -291,6 +293,27 @@ $("#dlg-resched-form").addEventListener("submit", async (e) => {
   } catch (err) {
     alert("Не удалось перенести: " + err.message);
   }
+}
+
+$$("[data-resched]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const kind = btn.dataset.resched;
+    if (kind === "today") applyDeadline(isoDateLocal(new Date()));
+    else if (kind === "tomorrow") applyDeadline(isoDateLocal(new Date(Date.now() + 86400000)));
+    else if (kind === "clear") applyDeadline(null);
+    else {
+      $("#dlg-resched-picker").classList.remove("hidden");
+      $("#dlg-resched-save").classList.remove("hidden");
+      $("#dlg-resched-date").focus();
+    }
+  });
+});
+
+$("#dlg-resched-cancel").addEventListener("click", () => $("#dlg-resched").close());
+
+$("#dlg-resched-save").addEventListener("click", () => {
+  const value = $("#dlg-resched-date").value;
+  if (value) applyDeadline(value);
 });
 
 // limit: показать первые N задач + кнопку «показать все» (0 = без ограничения)
