@@ -490,7 +490,33 @@ $("#dlg-task-form").addEventListener("submit", async (e) => {
 
 /* ---------------- привычки ---------------- */
 
-function checkboxHabitLi(h) {
+// Скролл на день назад: сегодня / вчера / позавчера — для дисциплины,
+// если не успела внести данные день в день (например, шаги).
+let HABITS_OFFSET = 0;
+const HABITS_OFFSET_LABELS = { 0: "Сегодня", "-1": "Вчера", "-2": "Позавчера" };
+
+function habitsDateIso(offset) {
+  const d = new Date();
+  d.setDate(d.getDate() + offset);
+  return isoDateLocal(d);
+}
+
+function fmtHabitsDate(iso, offset) {
+  const label = HABITS_OFFSET_LABELS[offset] || "";
+  const d = new Date(iso + "T00:00:00").toLocaleDateString(
+    "ru-RU", { day: "numeric", month: "long" });
+  return label ? `${label} · ${d}` : d;
+}
+
+$$("[data-habits-offset]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    HABITS_OFFSET = Number(btn.dataset.habitsOffset);
+    $$("[data-habits-offset]").forEach((b) => b.classList.toggle("active", b === btn));
+    loadHabits();
+  });
+});
+
+function checkboxHabitLi(h, dateIso) {
   const li = document.createElement("li");
   li.className = "habit" + (h.done_today ? " done" : "");
   const cb = document.createElement("input");
@@ -501,7 +527,7 @@ function checkboxHabitLi(h) {
     cb.disabled = true;
     try {
       await api("/api/habits/log", { method: "POST",
-        body: JSON.stringify({ habit_name: h.name, done: cb.checked }) });
+        body: JSON.stringify({ habit_name: h.name, done: cb.checked, date: dateIso }) });
       await loadHabits();
     } catch (err) {
       cb.checked = !cb.checked;
@@ -519,7 +545,7 @@ function checkboxHabitLi(h) {
   return li;
 }
 
-function numberHabitLi(h) {
+function numberHabitLi(h, dateIso) {
   const goalMet = h.goal_number != null && h.value_today != null && h.value_today >= h.goal_number;
   const li = document.createElement("li");
   li.className = "habit habit-number" + (goalMet ? " goal-met" : "");
@@ -546,7 +572,7 @@ function numberHabitLi(h) {
     try {
       const done = h.goal_number != null ? value >= h.goal_number : true;
       await api("/api/habits/log", { method: "POST",
-        body: JSON.stringify({ habit_name: h.name, done, value }) });
+        body: JSON.stringify({ habit_name: h.name, done, value, date: dateIso }) });
       await loadHabits();
     } catch (err) {
       input.disabled = false;
@@ -562,12 +588,71 @@ function numberHabitLi(h) {
   return li;
 }
 
+// Вода: вводим стаканами (по 200 мл — уточнено у Юлии), в Notion уходит
+// пересчитанное значение в литрах — так стрик и цель считаются в литрах.
+const WATER_GLASS_L = 0.2;
+
+function waterHabitLi(h, dateIso) {
+  const goalMet = h.goal_number != null && h.value_today != null && h.value_today >= h.goal_number;
+  const li = document.createElement("li");
+  li.className = "habit habit-number habit-water" + (goalMet ? " goal-met" : "");
+  const name = document.createElement("span");
+  name.className = "h-name";
+  name.textContent = h.name;
+
+  const goalBox = document.createElement("div");
+  goalBox.className = "h-goal";
+  const input = document.createElement("input");
+  input.type = "number";
+  input.min = "0";
+  input.step = "1";
+  input.className = "h-value-input";
+  input.value = h.value_today != null ? Math.round(h.value_today / WATER_GLASS_L) : "";
+  input.setAttribute("aria-label", h.name + ", стаканов по 200 мл");
+  const glassLabel = document.createElement("span");
+  glassLabel.className = "h-goal-label";
+  glassLabel.textContent = "стак.";
+  const litersLabel = document.createElement("span");
+  litersLabel.className = "h-water-liters";
+  const updateLiters = () => {
+    const glasses = Number(input.value) || 0;
+    const liters = glasses * WATER_GLASS_L;
+    litersLabel.textContent = `≈ ${liters.toFixed(1)}` +
+      (h.goal_number != null ? ` / ${h.goal_number} л` : " л");
+  };
+  updateLiters();
+  input.addEventListener("input", updateLiters);
+  input.addEventListener("change", async () => {
+    if (input.value === "") return;
+    const glasses = Number(input.value);
+    const value = Math.round(glasses * WATER_GLASS_L * 100) / 100;
+    input.disabled = true;
+    try {
+      const done = h.goal_number != null ? value >= h.goal_number : true;
+      await api("/api/habits/log", { method: "POST",
+        body: JSON.stringify({ habit_name: h.name, done, value, date: dateIso }) });
+      await loadHabits();
+    } catch (err) {
+      input.disabled = false;
+      alert("Не удалось сохранить: " + err.message);
+    }
+  });
+  goalBox.append(input, glassLabel, litersLabel);
+
+  const streak = document.createElement("span");
+  streak.className = "h-streak";
+  streak.textContent = h.streak > 0 ? `${h.streak} дн.` : "";
+  li.append(name, goalBox, streak);
+  return li;
+}
+
 async function loadHabits() {
   const empty = $("#habits-empty");
   empty.className = "empty hidden";
+  const dateIso = habitsDateIso(HABITS_OFFSET);
   try {
-    const data = await api("/api/habits");
-    $("#habits-date").textContent = data.date;
+    const data = await api(`/api/habits?date=${dateIso}`);
+    $("#habits-date").textContent = fmtHabitsDate(data.date, HABITS_OFFSET);
     const list = $("#habits-list");
     list.innerHTML = "";
     if (!data.habits.length) {
@@ -578,7 +663,10 @@ async function loadHabits() {
       return;
     }
     for (const h of data.habits) {
-      list.append(h.type === "Число" ? numberHabitLi(h) : checkboxHabitLi(h));
+      const li = h.name === "Вода" ? waterHabitLi(h, data.date)
+        : h.type === "Число" ? numberHabitLi(h, data.date)
+        : checkboxHabitLi(h, data.date);
+      list.append(li);
     }
   } catch (err) {
     empty.textContent = "Ошибка загрузки привычек: " + err.message;

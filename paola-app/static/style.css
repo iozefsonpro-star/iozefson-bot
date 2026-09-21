@@ -186,6 +186,10 @@ h2{font-family:var(--display);font-size:22px;font-weight:500;margin:0}
       border-radius:10px;background:#fff;text-align:right}
 .habit-number .h-goal-label{font-size:12px;color:var(--muted);white-space:nowrap}
 .habit-number.goal-met .h-goal-label{color:var(--done);font-weight:600}
+#habits-day-seg{margin-bottom:2px}
+.habit-water .h-value-input{width:52px}
+.habit-water .h-water-liters{font-size:12px;color:var(--muted);white-space:nowrap}
+.habit-water.goal-met .h-water-liters{color:var(--done);font-weight:600}
 
 /* голосовой ввод */
 .mic-btn{width:48px;height:48px;flex:none;border:1px solid var(--line-2);

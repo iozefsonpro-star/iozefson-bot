@@ -283,8 +283,29 @@ async def get_day_status():
     return result
 
 
+HABITS_BACKDATE_DAYS = 2  # можно внести данные за сегодня, вчера, позавчера
+
+
+def _clamp_habit_date(date_str: str | None):
+    """Проверяет запрошенную дату привычек: сегодня или максимум на
+    HABITS_BACKDATE_DAYS дней назад (дисциплина — внести пропущенное
+    за вчера/позавчера, не задним числом сильнее)."""
+    today = datetime.now(config.ROME_TZ).date()
+    if not date_str:
+        return today
+    try:
+        target = datetime.strptime(date_str, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Неверный формат даты (YYYY-MM-DD)")
+    if target > today or (today - target).days > HABITS_BACKDATE_DAYS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Дата вне диапазона: сегодня и максимум {HABITS_BACKDATE_DAYS} дня назад")
+    return target
+
+
 @app.get("/api/habits")
-async def get_habits():
+async def get_habits(date: str | None = None):
     try:
         habits = await notion.get_habits()
         entries = await notion.get_habit_log(days=60)
@@ -292,9 +313,10 @@ async def get_habits():
         logger.exception("Habits error")
         raise HTTPException(status_code=502, detail=_notion_hint(e))
     today = datetime.now(config.ROME_TZ).date()
-    today_iso = today.isoformat()
-    today_entries = {e["habit"]: e for e in entries if e["date"] == today_iso}
-    return {"date": today_iso, "configured": bool(config.NOTION_HABITS_DB_ID),
+    target = _clamp_habit_date(date)
+    target_iso = target.isoformat()
+    target_entries = {e["habit"]: e for e in entries if e["date"] == target_iso}
+    return {"date": target_iso, "configured": bool(config.NOTION_HABITS_DB_ID),
             "habits": [
                 {
                     "name": h["name"],
@@ -302,8 +324,8 @@ async def get_habits():
                     "goal": h.get("goal", ""),
                     "goal_number": h.get("goal_number"),
                     "unit": h.get("unit", ""),
-                    "done_today": bool(today_entries.get(h["name"], {}).get("done")),
-                    "value_today": today_entries.get(h["name"], {}).get("value"),
+                    "done_today": bool(target_entries.get(h["name"], {}).get("done")),
+                    "value_today": target_entries.get(h["name"], {}).get("value"),
                     "streak": notion.habit_streak(
                         entries, h["name"], today,
                         goal_number=h.get("goal_number") if h.get("type") == "Число" else None),
@@ -321,7 +343,7 @@ class HabitLogBody(BaseModel):
 
 @app.post("/api/habits/log")
 async def post_habit_log(body: HabitLogBody):
-    day = body.date or datetime.now(config.ROME_TZ).date().isoformat()
+    day = _clamp_habit_date(body.date).isoformat()
     try:
         await notion.log_habit(body.habit_name, day, body.done,
                                value=body.value, note=body.note)
