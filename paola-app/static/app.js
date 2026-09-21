@@ -662,7 +662,16 @@ async function loadHabits() {
       empty.classList.remove("hidden");
       return;
     }
+    let lastGroup = null;
     for (const h of data.habits) {
+      const group = h.group || null;
+      if (group && group !== lastGroup) {
+        const head = document.createElement("li");
+        head.className = "habit-group-head";
+        head.textContent = group;
+        list.append(head);
+      }
+      lastGroup = group;
       const li = h.name === "Вода" ? waterHabitLi(h, data.date)
         : h.type === "Число" ? numberHabitLi(h, data.date)
         : checkboxHabitLi(h, data.date);

@@ -170,7 +170,11 @@ async def get_done_between(start_iso: str, end_iso: str) -> list[dict]:
 
 async def get_habits() -> list[dict]:
     """Активные привычки. Тип «Число» — цель считается достигнутой по значению
-    (Значение >= Цель число), «Да/Нет» — по чекбоксу Выполнено."""
+    (Значение >= Цель число), «Да/Нет» — по чекбоксу Выполнено.
+
+    Порядок и Группа задают отображение на Доме (сортировка + заголовки
+    секций, например «Витамины», «Самообразование») — управляются из Notion,
+    без правки кода."""
     if not config.NOTION_HABITS_DB_ID:
         return []
     pages = await _query_all(
@@ -189,7 +193,10 @@ async def get_habits() -> list[dict]:
                 "goal": _rich_to_text(props.get("Цель", {}).get("rich_text", [])),
                 "goal_number": props.get("Цель число", {}).get("number"),
                 "unit": _rich_to_text(props.get("Единица", {}).get("rich_text", [])),
+                "order": props.get("Порядок", {}).get("number"),
+                "group": _rich_to_text(props.get("Группа", {}).get("rich_text", [])),
             })
+    habits.sort(key=lambda h: h["order"] if h["order"] is not None else 9999)
     return habits
 
 

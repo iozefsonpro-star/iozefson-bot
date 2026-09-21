@@ -324,6 +324,7 @@ async def get_habits(date: str | None = None):
                     "goal": h.get("goal", ""),
                     "goal_number": h.get("goal_number"),
                     "unit": h.get("unit", ""),
+                    "group": h.get("group") or "",
                     "done_today": bool(target_entries.get(h["name"], {}).get("done")),
                     "value_today": target_entries.get(h["name"], {}).get("value"),
                     "streak": notion.habit_streak(
