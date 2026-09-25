@@ -759,7 +759,7 @@ async function loadAnalytics() {
         const row = document.createElement("div");
         row.className = "habit-week";
         row.innerHTML = `<span>${esc(h.name)}</span>` +
-                        `<span class="hw-days">${h.days_done} / 7</span>`;
+                        `<span class="hw-days">${h.days_done} / ${h.days_total ?? 7}</span>`;
         sect.append(row);
       }
       box.append(sect);

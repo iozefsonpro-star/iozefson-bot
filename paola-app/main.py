@@ -329,8 +329,11 @@ async def get_habits(date: str | None = None):
                     "value_today": target_entries.get(h["name"], {}).get("value"),
                     "streak": notion.habit_streak(
                         entries, h["name"], today,
-                        goal_number=h.get("goal_number") if h.get("type") == "Число" else None),
+                        goal_number=h.get("goal_number") if h.get("type") == "Число" else None,
+                        weekdays=h.get("weekdays")),
                 } for h in habits
+                # привычки с расписанием («Дни») — только в свои дни недели
+                if notion.habit_scheduled(h, target)
             ]}
 
 
@@ -405,12 +408,16 @@ async def get_analytics(offset: int = 0):
         ({"zone": z, "titles": titles} for z, titles in carry_zones.items()),
         key=lambda x: -len(x["titles"]))
 
-    week_days = {(monday + timedelta(days=i)).isoformat() for i in range(7)}
+    week_dates = [monday + timedelta(days=i) for i in range(7)]
+    week_days = {d.isoformat() for d in week_dates}
     habits_week = []
     for h in habits:
         days_done = sum(1 for e in log
                         if e["habit"] == h["name"] and e["done"] and e["date"] in week_days)
-        habits_week.append({"name": h["name"], "days_done": days_done})
+        # знаменатель — запланированные дни недели (7 или, например, 1 для «Сб»)
+        days_total = sum(1 for d in week_dates if notion.habit_scheduled(h, d))
+        habits_week.append({"name": h["name"], "days_done": days_done,
+                            "days_total": days_total})
 
     return {
         "offset": offset,

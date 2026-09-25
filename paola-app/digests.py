@@ -65,10 +65,12 @@ async def build_morning_digest() -> str:
         parts.extend(f"  {_task_line(t)}" for t in overdue)
         parts.append("")
 
+    habits = [h for h in habits if notion.habit_scheduled(h, now.date())]
     if habits:
         parts.append("🔁 Привычки на сегодня:")
         for h in habits:
-            streak = notion.habit_streak(log, h["name"], now.date())
+            streak = notion.habit_streak(log, h["name"], now.date(),
+                                         weekdays=h.get("weekdays"))
             parts.append(f"  ⬜ {h['name']} (серия {streak} дн.)")
 
     return "\n".join(parts).strip()
@@ -94,6 +96,7 @@ async def build_evening_digest() -> str:
         parts.extend(f"  {_task_line(t)}" for t in overdue)
         parts.append("")
 
+    habits = [h for h in habits if notion.habit_scheduled(h, now.date())]
     if habits:
         done_today = {e["habit"] for e in log if e["date"] == today_iso and e["done"]}
         undone = [h["name"] for h in habits if h["name"] not in done_today]

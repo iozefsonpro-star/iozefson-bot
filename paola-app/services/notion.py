@@ -168,13 +168,23 @@ async def get_done_between(start_iso: str, end_iso: str) -> list[dict]:
 # Схемы описаны в README (создаются один раз вручную).
 # ---------------------------------------------------------------------------
 
+WEEKDAYS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]  # индекс = date.weekday()
+
+
+def habit_scheduled(habit: dict, day: date) -> bool:
+    """Запланирована ли привычка на этот день (по полю «Дни»; пусто — всегда)."""
+    weekdays = habit.get("weekdays")
+    return not weekdays or day.weekday() in weekdays
+
+
 async def get_habits() -> list[dict]:
     """Активные привычки. Тип «Число» — цель считается достигнутой по значению
     (Значение >= Цель число), «Да/Нет» — по чекбоксу Выполнено.
 
     Порядок и Группа задают отображение на Доме (сортировка + заголовки
     секций, например «Витамины», «Самообразование») — управляются из Notion,
-    без правки кода."""
+    без правки кода. Дни (мультиселект Пн…Вс) — расписание: пусто — каждый
+    день, иначе привычка показывается только в эти дни недели."""
     if not config.NOTION_HABITS_DB_ID:
         return []
     pages = await _query_all(
@@ -195,6 +205,10 @@ async def get_habits() -> list[dict]:
                 "unit": _rich_to_text(props.get("Единица", {}).get("rich_text", [])),
                 "order": props.get("Порядок", {}).get("number"),
                 "group": _rich_to_text(props.get("Группа", {}).get("rich_text", [])),
+                "weekdays": sorted(
+                    WEEKDAYS.index(o["name"])
+                    for o in props.get("Дни", {}).get("multi_select", [])
+                    if o.get("name") in WEEKDAYS) or None,
             })
     habits.sort(key=lambda h: h["order"] if h["order"] is not None else 9999)
     return habits
@@ -253,25 +267,40 @@ async def log_habit(habit_name: str, day: str, done: bool,
 
 
 def habit_streak(entries: list[dict], habit_name: str, today: date,
-                 goal_number: float | None = None) -> int:
+                 goal_number: float | None = None,
+                 weekdays: list[int] | None = None) -> int:
     """Текущая серия подряд выполненных дней для привычки.
 
     goal_number задан — привычка числовая, день засчитан при Значение >=
-    Цель число; иначе — по чекбоксу Выполнено (тип «Да/Нет»)."""
+    Цель число; иначе — по чекбоксу Выполнено (тип «Да/Нет»).
+    weekdays задан — считаются только запланированные дни (для привычки
+    «по субботам» серия = сколько суббот подряд)."""
     if goal_number is not None:
         done_days = {e["date"] for e in entries
                     if e["habit"] == habit_name and e.get("value") is not None
                     and e["value"] >= goal_number}
     else:
         done_days = {e["date"] for e in entries if e["habit"] == habit_name and e["done"]}
+    if weekdays:
+        # отметка в незапланированный день серию не рвёт и не увеличивает
+        scheduled = lambda d: d.weekday() in weekdays
+    else:
+        scheduled = lambda d: True
+
+    def prev(d: date) -> date:
+        d -= timedelta(days=1)
+        while not scheduled(d):
+            d -= timedelta(days=1)
+        return d
+
     streak = 0
-    day = today
+    day = today if scheduled(today) else prev(today)
     # сегодняшний день ещё может быть не отмечен — серия не рвётся
-    if day.isoformat() not in done_days:
-        day -= timedelta(days=1)
+    if day == today and day.isoformat() not in done_days:
+        day = prev(day)
     while day.isoformat() in done_days:
         streak += 1
-        day -= timedelta(days=1)
+        day = prev(day)
     return streak
 
 
