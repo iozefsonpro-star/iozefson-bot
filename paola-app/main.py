@@ -332,7 +332,7 @@ async def get_habits(date: str | None = None):
                         goal_number=h.get("goal_number") if h.get("type") == "Число" else None,
                         weekdays=h.get("weekdays")),
                 } for h in habits
-                # привычки с расписанием («Дни») — только в свои дни недели
+                # привычки с расписанием («Дни недели») — только в свои дни недели
                 if notion.habit_scheduled(h, target)
             ]}
 

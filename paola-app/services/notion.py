@@ -172,7 +172,7 @@ WEEKDAYS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]  # инде�
 
 
 def habit_scheduled(habit: dict, day: date) -> bool:
-    """Запланирована ли привычка на этот день (по полю «Дни»; пусто — всегда)."""
+    """Запланирована ли привычка на этот день (по полю «Дни недели»; пусто — всегда)."""
     weekdays = habit.get("weekdays")
     return not weekdays or day.weekday() in weekdays
 
@@ -183,7 +183,7 @@ async def get_habits() -> list[dict]:
 
     Порядок и Группа задают отображение на Доме (сортировка + заголовки
     секций, например «Витамины», «Самообразование») — управляются из Notion,
-    без правки кода. Дни (мультиселект Пн…Вс) — расписание: пусто — каждый
+    без правки кода. Дни недели (мультиселект Пн…Вс) — расписание: пусто — каждый
     день, иначе привычка показывается только в эти дни недели."""
     if not config.NOTION_HABITS_DB_ID:
         return []
@@ -207,7 +207,7 @@ async def get_habits() -> list[dict]:
                 "group": _rich_to_text(props.get("Группа", {}).get("rich_text", [])),
                 "weekdays": sorted(
                     WEEKDAYS.index(o["name"])
-                    for o in props.get("Дни", {}).get("multi_select", [])
+                    for o in props.get("Дни недели", {}).get("multi_select", [])
                     if o.get("name") in WEEKDAYS) or None,
             })
     habits.sort(key=lambda h: h["order"] if h["order"] is not None else 9999)
